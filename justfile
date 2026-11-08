@@ -60,7 +60,7 @@ validate:
 
 # Run everything that needs real CUDA, failing rather than skipping. Needs an NVIDIA GPU
 test-nvidia:
-    CUDASH_REQUIRE_NVIDIA=1 cargo test -- --nocapture
+    CUDASH_REQUIRE_NVIDIA=1 cargo test -- --nocapture --test-threads=1
     cargo run --example slang_cudarc
 
 # Rebuild the Slang kernels and list what was generated
