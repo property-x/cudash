@@ -1,0 +1,68 @@
+[package]
+name = "cudash"
+version = "0.1.0"
+edition = "2024"
+description = "A minimal and safe api over the vulkan toolkit. Inspired by cudarc's basic driver API with optional interop."
+
+[dependencies]
+ash = "0.38"
+# only needed for interop but can be enabled on non-Nvidia hardware as well.
+cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
+
+[features]
+# On by default. Enables `cudash::interop` and the cudarc dependency.
+# Even with it should run on any GPU without the interop.
+default = ["cudarc"]
+cudarc = ["dep:cudarc"]
+
+[dev-dependencies]
+cucumber = "0.23"
+# Tests compile kernels with NVRTC (cudarc::nvrtc). Dev-only, so library users don't get it.
+cudarc = { version = "0.19", default-features = false, features = ["std", "driver", "nvrtc", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+
+# Std-only timing harness, so benches add no dependencies.
+[[bench]]
+name = "memory"
+harness = false
+required-features = ["cudarc"]
+
+# Driver-only benches. They run on any Vulkan 1.3 GPU, so they need no cudarc feature.
+[[bench]]
+name = "launch"
+harness = false
+
+[[bench]]
+name = "transfer"
+harness = false
+
+[[test]]
+name = "interop_kernels"
+required-features = ["cudarc"]
+
+[[test]]
+name = "interop_memory"
+required-features = ["cudarc"]
+
+[[test]]
+name = "interop_roundtrip"
+required-features = ["cudarc"]
+
+[[test]]
+name = "interop_transfers"
+required-features = ["cudarc"]
+
+[[test]]
+name = "interop_slang"
+required-features = ["cudarc"]
+
+[[example]]
+name = "slang_spirv"
+
+[[example]]
+name = "slang_cudarc"
+required-features = ["cudarc"]
+
+[[test]]
+name = "features"
+harness = false
