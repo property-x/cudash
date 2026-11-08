@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ash::{ext, vk};
+use ash::{ext, khr, vk};
 
 use super::{DriverError, stream::Tracking};
 
@@ -40,11 +40,22 @@ struct HostImport {
 
 /// Loads Vulkan and lists suitable GPUs, discrete ones first, so ordinal 0 is the
 /// one a CUDA user would expect.
+/// If portability extension is enabled, we list these devices as well, e.g. MoltenVK.
 fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), DriverError> {
     unsafe {
         let entry = ash::Entry::load().map_err(|e| DriverError::NoVulkan(e.to_string()))?;
         let app = vk::ApplicationInfo::default().api_version(API_VERSION);
-        let info = vk::InstanceCreateInfo::default().application_info(&app);
+        let extension = entry.enumerate_instance_extension_properties(None)?;
+        let portability = [khr::portability_enumeration::NAME.as_ptr()];
+        let mut info = vk::InstanceCreateInfo::default().application_info(&app);
+        if extension
+            .iter()
+            .any(|ext| ext.extension_name_as_c_str() == Ok(khr::portability_enumeration::NAME))
+        {
+            info = info
+                .enabled_extension_names(&portability)
+                .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+        }
         let instance = entry.create_instance(&info, None)?;
         let mut devices = match instance.enumerate_physical_devices() {
             Ok(devices) => devices,
@@ -71,7 +82,10 @@ fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), D
 /// with the `cudarc` feature, exporting memory and semaphores to CUDA.
 fn available_extensions(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Vec<&'static CStr> {
     let have = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
-    let mut wanted = vec![ext::external_memory_host::NAME];
+    let mut wanted = vec![
+        ext::external_memory_host::NAME,
+        khr::portability_subset::NAME,
+    ];
     #[cfg(feature = "cudarc")]
     wanted.extend(crate::interop::EXPORT_EXTENSIONS);
     wanted.retain(|name| have.iter().any(|e| e.extension_name_as_c_str() == Ok(name)));
