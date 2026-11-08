@@ -28,7 +28,8 @@ Hint: This is a prototype to help me learn and understand Vulkan compute from a 
 - **Memory:** `alloc`, `alloc_zeros`, `clone_htod`, `clone_dtoh`, `clone_dtod`, `memcpy_htod`,
   `memcpy_dtoh`, `memcpy_dtod`, `memset_zeros`, `null`, and `Clone` on slices.
 - **Views:** `slice`, `slice_mut`, `split_at`, `split_at_mut`, their `try_` versions, `as_view` and
-  `as_view_mut`. `device_ptr` and `device_ptr_mut` return the buffer device address.
+  `as_view_mut`. `transmute` and `transmute_mut` reinterpret the element type.
+  `device_ptr` and `device_ptr_mut` return the buffer device address.
 - **Streams:** `default_stream`, `new_stream`, `fork` and `synchronize`. Work runs in call order, and
   buffers used from several streams are ordered automatically.
 - **Kernels:** `load_module`, `load_function`, `launch_builder`, `arg`, `launch` and `LaunchConfig`.

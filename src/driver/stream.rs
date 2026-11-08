@@ -801,6 +801,21 @@ mod tests {
     }
 
     #[test]
+    fn transmute_reinterprets_the_same_bytes() {
+        let stream = CudaContext::new(0).unwrap().default_stream();
+        let mut slice = stream.clone_htod(&[1u32, 0, 2, 0, 3]).unwrap();
+        unsafe {
+            assert!(slice.transmute::<u64>(3).is_none(), "needs 24 of 20 bytes");
+            assert!(slice.transmute::<u64>(usize::MAX).is_none(), "overflows");
+            let view = slice.slice(2..).transmute::<u64>(1).unwrap();
+            assert_eq!(stream.clone_dtoh(&view).unwrap(), [2]);
+            let mut wide = slice.transmute_mut::<u64>(2).unwrap();
+            stream.memcpy_htod(&[7u64, 8], &mut wide).unwrap();
+        }
+        assert_eq!(stream.clone_dtoh(&slice).unwrap(), [7, 0, 8, 0, 3]);
+    }
+
+    #[test]
     fn equality_is_identity() {
         let ctx = CudaContext::new(0).unwrap();
         assert_eq!(ctx.default_stream(), ctx.default_stream());

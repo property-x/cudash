@@ -145,6 +145,11 @@ pub trait DevicePtrMut<T>: DeviceSlice<T> {
     }
 }
 
+/// Whether `len` elements of `S` fit in `bytes`. Unlike cudarc, an overflowing `len` doesn't fit.
+fn fits<S>(len: usize, bytes: usize) -> bool {
+    len.checked_mul(size_of::<S>()).is_some_and(|needed| needed <= bytes)
+}
+
 /// Resolves range bounds against a length, returning `None` if they're out of range.
 fn resolve(bounds: impl RangeBounds<usize>, len: usize) -> Option<(usize, usize)> {
     let start = match bounds.start_bound() {
@@ -268,6 +273,25 @@ impl<T> CudaSlice<T> {
 
     pub fn try_slice(&self, bounds: impl RangeBounds<usize>) -> Option<CudaView<'_, T>> {
         self.as_view().try_slice(bounds)
+    }
+
+    /// The same memory as `len` elements of `S`, or `None` if that needs more bytes than
+    /// `self` has.
+    ///
+    /// # Safety
+    /// The bytes must be valid values of `S`, and the view's start must be aligned for `S`
+    /// wherever a kernel reads it through a pointer.
+    pub unsafe fn transmute<S>(&self, len: usize) -> Option<CudaView<'_, S>> {
+        unsafe { self.as_view().transmute(len) }
+    }
+
+    /// [`Self::transmute`] for writing.
+    ///
+    /// # Safety
+    /// The bytes must be valid values of `S`, and the view's start must be aligned for `S`
+    /// wherever a kernel reads it through a pointer.
+    pub unsafe fn transmute_mut<S>(&mut self, len: usize) -> Option<CudaViewMut<'_, S>> {
+        unsafe { self.as_view_mut().into_transmute_mut(len) }
     }
 
     /// # Panics
@@ -394,6 +418,22 @@ impl<'a, T> CudaView<'a, T> {
         self.try_slice(bounds).expect("range out of bounds")
     }
 
+    /// The same memory as `len` elements of `S`, or `None` if that needs more bytes than
+    /// `self` has.
+    ///
+    /// # Safety
+    /// The bytes must be valid values of `S`, and the view's start must be aligned for `S`
+    /// wherever a kernel reads it through a pointer.
+    pub unsafe fn transmute<S>(&self, len: usize) -> Option<CudaView<'a, S>> {
+        fits::<S>(len, self.num_bytes()).then_some(CudaView {
+            buffer: self.buffer,
+            offset: self.offset,
+            len,
+            stream: self.stream,
+            marker: PhantomData,
+        })
+    }
+
     pub fn try_slice(&self, bounds: impl RangeBounds<usize>) -> Option<Self> {
         let (start, len) = resolve(bounds, self.len)?;
         let offset = self.offset + (start * size_of::<T>()) as u64;
@@ -481,6 +521,36 @@ impl<'a, T> CudaViewMut<'a, T> {
             stream: self.stream,
             marker: PhantomData,
         }
+    }
+
+    /// [`CudaView::transmute`] of this view.
+    ///
+    /// # Safety
+    /// The bytes must be valid values of `S`, and the view's start must be aligned for `S`
+    /// wherever a kernel reads it through a pointer.
+    pub unsafe fn transmute<S>(&self, len: usize) -> Option<CudaView<'_, S>> {
+        unsafe { self.as_view().transmute(len) }
+    }
+
+    /// [`CudaView::transmute`] for writing.
+    ///
+    /// # Safety
+    /// The bytes must be valid values of `S`, and the view's start must be aligned for `S`
+    /// wherever a kernel reads it through a pointer.
+    pub unsafe fn transmute_mut<S>(&mut self, len: usize) -> Option<CudaViewMut<'_, S>> {
+        unsafe { self.as_view_mut().into_transmute_mut(len) }
+    }
+
+    /// # Safety
+    /// As [`Self::transmute_mut`].
+    unsafe fn into_transmute_mut<S>(self, len: usize) -> Option<CudaViewMut<'a, S>> {
+        fits::<S>(len, self.num_bytes()).then_some(CudaViewMut {
+            buffer: self.buffer,
+            offset: self.offset,
+            len,
+            stream: self.stream,
+            marker: PhantomData,
+        })
     }
 
     fn try_into_slice_mut(self, bounds: impl RangeBounds<usize>) -> Option<Self> {
