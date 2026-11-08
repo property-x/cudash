@@ -326,6 +326,22 @@ pub struct CudaStream {
     ctx: Arc<CudaContext>,
 }
 
+impl std::fmt::Debug for CudaStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaStream")
+            .field("ctx", &self.ctx)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Streams are equal when they are the same queue of work, as in cudarc.
+impl PartialEq for CudaStream {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.core, &other.core)
+    }
+}
+impl Eq for CudaStream {}
+
 impl CudaStream {
     pub(crate) fn new(ctx: &Arc<CudaContext>, core: Arc<StreamCore>) -> Arc<Self> {
         Arc::new(Self {
@@ -720,6 +736,15 @@ mod tests {
                 true
             }
         }
+    }
+
+    #[test]
+    fn equality_is_identity() {
+        let ctx = CudaContext::new(0).unwrap();
+        assert_eq!(ctx.default_stream(), ctx.default_stream());
+        assert_ne!(ctx.default_stream(), ctx.new_stream().unwrap());
+        assert_ne!(ctx, CudaContext::new(0).unwrap());
+        assert!(format!("{:?}", ctx.default_stream()).contains("ordinal: 0"));
     }
 
     #[test]

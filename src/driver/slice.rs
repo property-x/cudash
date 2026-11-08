@@ -145,6 +145,32 @@ pub struct CudaSlice<T> {
     marker: PhantomData<T>,
 }
 
+impl<T> std::fmt::Debug for CudaSlice<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaSlice")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for CudaView<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaView")
+            .field("byte_offset", &self.offset)
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for CudaViewMut<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaViewMut")
+            .field("byte_offset", &self.offset)
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
 // SAFETY: this only holds GPU memory, never a host `T`.
 unsafe impl<T> Send for CudaSlice<T> {}
 unsafe impl<T> Sync for CudaSlice<T> {}

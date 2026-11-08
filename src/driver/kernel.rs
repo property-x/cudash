@@ -26,8 +26,10 @@ const EXECUTION_MODE_LOCAL_SIZE: u32 = 17;
 const SPIRV_HEADER_WORDS: usize = 5;
 
 /// A compiled kernel module, the counterpart of cudarc's `Ptx`.
+#[derive(Debug, Clone)]
 pub struct Spirv(SpirvKind);
 
+#[derive(Debug, Clone)]
 enum SpirvKind {
     File(PathBuf),
     Binary(Vec<u8>),
@@ -162,8 +164,34 @@ impl CudaModule {
     }
 }
 
+#[derive(Clone)]
 pub struct CudaFunction {
     inner: Arc<FunctionInner>,
+}
+
+impl std::fmt::Debug for CudaFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaFunction")
+            .field("name", &self.inner.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for CudaModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaModule")
+            .field("ctx", &self.ctx)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for LaunchArgs<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchArgs")
+            .field("function", self.function)
+            .field("arg_bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 struct FunctionInner {

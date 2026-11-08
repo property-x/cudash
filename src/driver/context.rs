@@ -16,6 +16,24 @@ pub struct CudaContext {
     pub(crate) registered: Registry,
 }
 
+impl std::fmt::Debug for CudaContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaContext")
+            .field("ordinal", &self.device.ordinal)
+            .field("name", &self.device.name())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Contexts are equal when they share a Vulkan device. Unlike CUDA's primary context, two
+/// `CudaContext::new(0)` calls create two devices, so they aren't equal.
+impl PartialEq for CudaContext {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.device, &other.device)
+    }
+}
+impl Eq for CudaContext {}
+
 impl CudaContext {
     /// Creates a context on the GPU with this ordinal. Discrete GPUs come first.
     ///
