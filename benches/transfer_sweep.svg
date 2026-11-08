@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 840" font-family="sans-serif" font-size="12">
+    <rect width="900" height="840" fill="white"/>
+    <text x="70" y="24" font-size="16" font-weight="bold">transfer_sweep: host to device copy (copy + synchronize)
+    </text>
+    <text x="70" y="42" fill="#555">AMD Steam Machine (RADV NAVI33). Line = median, band = 10th to 90th percentile.
+    </text>
+    <text x="16" y="225" transform="rotate(-90 16 225)" text-anchor="middle" fill="#333">GB/s</text>
+    <line x1="70" x2="880" y1="390.0" y2="390.0" stroke="#ddd"/>
+    <text x="62" y="394.0" text-anchor="end">0</text>
+    <line x1="70" x2="880" y1="331.5" y2="331.5" stroke="#ddd"/>
+    <text x="62" y="335.5" text-anchor="end">2</text>
+    <line x1="70" x2="880" y1="273.1" y2="273.1" stroke="#ddd"/>
+    <text x="62" y="277.1" text-anchor="end">4</text>
+    <line x1="70" x2="880" y1="214.6" y2="214.6" stroke="#ddd"/>
+    <text x="62" y="218.6" text-anchor="end">6</text>
+    <line x1="70" x2="880" y1="156.2" y2="156.2" stroke="#ddd"/>
+    <text x="62" y="160.2" text-anchor="end">8</text>
+    <line x1="70" x2="880" y1="97.7" y2="97.7" stroke="#ddd"/>
+    <text x="62" y="101.7" text-anchor="end">10</text>
+    <line x1="70.0" x2="70.0" y1="60" y2="390" stroke="#eee"/>
+    <text x="70.0" y="406" text-anchor="middle">4 KiB</text>
+    <line x1="200.7" x2="200.7" y1="60" y2="390" stroke="#eee"/>
+    <text x="200.7" y="406" text-anchor="middle">16 KiB</text>
+    <line x1="331.3" x2="331.3" y1="60" y2="390" stroke="#eee"/>
+    <text x="331.3" y="406" text-anchor="middle">64 KiB</text>
+    <line x1="462.0" x2="462.0" y1="60" y2="390" stroke="#eee"/>
+    <text x="462.0" y="406" text-anchor="middle">256 KiB</text>
+    <line x1="592.6" x2="592.6" y1="60" y2="390" stroke="#eee"/>
+    <text x="592.6" y="406" text-anchor="middle">1 MiB</text>
+    <line x1="723.3" x2="723.3" y1="60" y2="390" stroke="#eee"/>
+    <text x="723.3" y="406" text-anchor="middle">4 MiB</text>
+    <line x1="854.0" x2="854.0" y1="60" y2="390" stroke="#eee"/>
+    <text x="854.0" y="406" text-anchor="middle">16 MiB</text>
+    <polyline
+            points="70.0,388.3 135.3,386.6 200.7,383.3 266.0,373.7 331.3,359.9 396.6,337.2 462.0,302.6 527.3,271.8 592.6,220.3 618.7,194.0 658.0,179.8 723.3,154.7 749.3,158.6 788.6,188.9 854.0,170.5 880.0,187.9"
+            fill="none" stroke="#4c78a8" stroke-width="2"/>
+    <circle cx="70.0" cy="388.3" r="3" fill="#4c78a8"/>
+    <circle cx="135.3" cy="386.6" r="3" fill="#4c78a8"/>
+    <circle cx="200.7" cy="383.3" r="3" fill="#4c78a8"/>
+    <circle cx="266.0" cy="373.7" r="3" fill="#4c78a8"/>
+    <circle cx="331.3" cy="359.9" r="3" fill="#4c78a8"/>
+    <circle cx="396.6" cy="337.2" r="3" fill="#4c78a8"/>
+    <circle cx="462.0" cy="302.6" r="3" fill="#4c78a8"/>
+    <circle cx="527.3" cy="271.8" r="3" fill="#4c78a8"/>
+    <circle cx="592.6" cy="220.3" r="3" fill="#4c78a8"/>
+    <circle cx="618.7" cy="194.0" r="3" fill="#4c78a8"/>
+    <circle cx="658.0" cy="179.8" r="3" fill="#4c78a8"/>
+    <circle cx="723.3" cy="154.7" r="3" fill="#4c78a8"/>
+    <circle cx="749.3" cy="158.6" r="3" fill="#4c78a8"/>
+    <circle cx="788.6" cy="188.9" r="3" fill="#4c78a8"/>
+    <circle cx="854.0" cy="170.5" r="3" fill="#4c78a8"/>
+    <circle cx="880.0" cy="187.9" r="3" fill="#4c78a8"/>
+    <polyline
+            points="70.0,388.3 135.3,386.6 200.7,383.3 266.0,374.4 331.3,360.5 396.6,336.4 462.0,302.8 527.3,268.4 592.6,221.2 618.7,195.3 658.0,174.4 723.3,145.7 749.3,137.0 788.6,151.8 854.0,169.1 880.0,187.9"
+            fill="none" stroke="#f58518" stroke-width="2"/>
+    <circle cx="70.0" cy="388.3" r="3" fill="#f58518"/>
+    <circle cx="135.3" cy="386.6" r="3" fill="#f58518"/>
+    <circle cx="200.7" cy="383.3" r="3" fill="#f58518"/>
+    <circle cx="266.0" cy="374.4" r="3" fill="#f58518"/>
+    <circle cx="331.3" cy="360.5" r="3" fill="#f58518"/>
+    <circle cx="396.6" cy="336.4" r="3" fill="#f58518"/>
+    <circle cx="462.0" cy="302.8" r="3" fill="#f58518"/>
+    <circle cx="527.3" cy="268.4" r="3" fill="#f58518"/>
+    <circle cx="592.6" cy="221.2" r="3" fill="#f58518"/>
+    <circle cx="618.7" cy="195.3" r="3" fill="#f58518"/>
+    <circle cx="658.0" cy="174.4" r="3" fill="#f58518"/>
+    <circle cx="723.3" cy="145.7" r="3" fill="#f58518"/>
+    <circle cx="749.3" cy="137.0" r="3" fill="#f58518"/>
+    <circle cx="788.6" cy="151.8" r="3" fill="#f58518"/>
+    <circle cx="854.0" cy="169.1" r="3" fill="#f58518"/>
+    <circle cx="880.0" cy="187.9" r="3" fill="#f58518"/>
+    <polyline
+            points="70.0,389.1 135.3,388.3 200.7,385.5 266.0,380.9 331.3,372.2 396.6,356.9 462.0,328.7 527.3,301.8 592.6,242.7 618.7,269.6 658.0,230.8 723.3,184.5 749.3,160.0 788.6,135.3 854.0,108.8 880.0,103.0"
+            fill="none" stroke="#54a24b" stroke-width="2"/>
+    <circle cx="70.0" cy="389.1" r="3" fill="#54a24b"/>
+    <circle cx="135.3" cy="388.3" r="3" fill="#54a24b"/>
+    <circle cx="200.7" cy="385.5" r="3" fill="#54a24b"/>
+    <circle cx="266.0" cy="380.9" r="3" fill="#54a24b"/>
+    <circle cx="331.3" cy="372.2" r="3" fill="#54a24b"/>
+    <circle cx="396.6" cy="356.9" r="3" fill="#54a24b"/>
+    <circle cx="462.0" cy="328.7" r="3" fill="#54a24b"/>
+    <circle cx="527.3" cy="301.8" r="3" fill="#54a24b"/>
+    <circle cx="592.6" cy="242.7" r="3" fill="#54a24b"/>
+    <circle cx="618.7" cy="269.6" r="3" fill="#54a24b"/>
+    <circle cx="658.0" cy="230.8" r="3" fill="#54a24b"/>
+    <circle cx="723.3" cy="184.5" r="3" fill="#54a24b"/>
+    <circle cx="749.3" cy="160.0" r="3" fill="#54a24b"/>
+    <circle cx="788.6" cy="135.3" r="3" fill="#54a24b"/>
+    <circle cx="854.0" cy="108.8" r="3" fill="#54a24b"/>
+    <circle cx="880.0" cy="103.0" r="3" fill="#54a24b"/>
+    <text x="16" y="595" transform="rotate(-90 16 595)" text-anchor="middle" fill="#333">time per copy, µs</text>
+    <line x1="70" x2="880" y1="760.0" y2="760.0" stroke="#ddd"/>
+    <text x="62" y="764.0" text-anchor="end">0</text>
+    <line x1="70" x2="880" y1="670.3" y2="670.3" stroke="#ddd"/>
+    <text x="62" y="674.3" text-anchor="end">1000</text>
+    <line x1="70" x2="880" y1="580.6" y2="580.6" stroke="#ddd"/>
+    <text x="62" y="584.6" text-anchor="end">2000</text>
+    <line x1="70" x2="880" y1="490.9" y2="490.9" stroke="#ddd"/>
+    <text x="62" y="494.9" text-anchor="end">3000</text>
+    <line x1="70.0" x2="70.0" y1="430" y2="760" stroke="#eee"/>
+    <text x="70.0" y="776" text-anchor="middle">4 KiB</text>
+    <line x1="200.7" x2="200.7" y1="430" y2="760" stroke="#eee"/>
+    <text x="200.7" y="776" text-anchor="middle">16 KiB</text>
+    <line x1="331.3" x2="331.3" y1="430" y2="760" stroke="#eee"/>
+    <text x="331.3" y="776" text-anchor="middle">64 KiB</text>
+    <line x1="462.0" x2="462.0" y1="430" y2="760" stroke="#eee"/>
+    <text x="462.0" y="776" text-anchor="middle">256 KiB</text>
+    <line x1="592.6" x2="592.6" y1="430" y2="760" stroke="#eee"/>
+    <text x="592.6" y="776" text-anchor="middle">1 MiB</text>
+    <line x1="723.3" x2="723.3" y1="430" y2="760" stroke="#eee"/>
+    <text x="723.3" y="776" text-anchor="middle">4 MiB</text>
+    <line x1="854.0" x2="854.0" y1="430" y2="760" stroke="#eee"/>
+    <text x="854.0" y="776" text-anchor="middle">16 MiB</text>
+    <polyline
+            points="70.0,753.6 135.3,753.6 200.7,753.6 266.0,754.7 331.3,754.3 396.6,753.5 462.0,752.1 527.3,748.4 592.6,743.8 618.7,741.5 658.0,733.8 723.3,713.3 749.3,697.3 788.6,650.6 854.0,559.6 880.0,473.0"
+            fill="none" stroke="#4c78a8" stroke-width="2"/>
+    <circle cx="70.0" cy="753.6" r="3" fill="#4c78a8"/>
+    <circle cx="135.3" cy="753.6" r="3" fill="#4c78a8"/>
+    <circle cx="200.7" cy="753.6" r="3" fill="#4c78a8"/>
+    <circle cx="266.0" cy="754.7" r="3" fill="#4c78a8"/>
+    <circle cx="331.3" cy="754.3" r="3" fill="#4c78a8"/>
+    <circle cx="396.6" cy="753.5" r="3" fill="#4c78a8"/>
+    <circle cx="462.0" cy="752.1" r="3" fill="#4c78a8"/>
+    <circle cx="527.3" cy="748.4" r="3" fill="#4c78a8"/>
+    <circle cx="592.6" cy="743.8" r="3" fill="#4c78a8"/>
+    <circle cx="618.7" cy="741.5" r="3" fill="#4c78a8"/>
+    <circle cx="658.0" cy="733.8" r="3" fill="#4c78a8"/>
+    <circle cx="723.3" cy="713.3" r="3" fill="#4c78a8"/>
+    <circle cx="749.3" cy="697.3" r="3" fill="#4c78a8"/>
+    <circle cx="788.6" cy="650.6" r="3" fill="#4c78a8"/>
+    <circle cx="854.0" cy="559.6" r="3" fill="#4c78a8"/>
+    <circle cx="880.0" cy="473.0" r="3" fill="#4c78a8"/>
+    <polyline
+            points="70.0,753.6 135.3,753.7 200.7,753.6 266.0,754.5 331.3,754.2 396.6,753.6 462.0,752.1 527.3,748.7 592.6,743.7 618.7,741.4 658.0,734.5 723.3,715.0 749.3,702.7 788.6,667.7 854.0,560.8 880.0,473.0"
+            fill="none" stroke="#f58518" stroke-width="2"/>
+    <circle cx="70.0" cy="753.6" r="3" fill="#f58518"/>
+    <circle cx="135.3" cy="753.7" r="3" fill="#f58518"/>
+    <circle cx="200.7" cy="753.6" r="3" fill="#f58518"/>
+    <circle cx="266.0" cy="754.5" r="3" fill="#f58518"/>
+    <circle cx="331.3" cy="754.2" r="3" fill="#f58518"/>
+    <circle cx="396.6" cy="753.6" r="3" fill="#f58518"/>
+    <circle cx="462.0" cy="752.1" r="3" fill="#f58518"/>
+    <circle cx="527.3" cy="748.7" r="3" fill="#f58518"/>
+    <circle cx="592.6" cy="743.7" r="3" fill="#f58518"/>
+    <circle cx="618.7" cy="741.4" r="3" fill="#f58518"/>
+    <circle cx="658.0" cy="734.5" r="3" fill="#f58518"/>
+    <circle cx="723.3" cy="715.0" r="3" fill="#f58518"/>
+    <circle cx="749.3" cy="702.7" r="3" fill="#f58518"/>
+    <circle cx="788.6" cy="667.7" r="3" fill="#f58518"/>
+    <circle cx="854.0" cy="560.8" r="3" fill="#f58518"/>
+    <circle cx="880.0" cy="473.0" r="3" fill="#f58518"/>
+    <polyline
+            points="70.0,747.6 135.3,747.1 200.7,750.5 266.0,750.5 331.3,750.4 396.6,749.6 462.0,748.8 527.3,744.4 592.6,741.3 618.7,729.9 658.0,725.5 723.3,706.5 749.3,697.0 788.6,673.6 854.0,603.5 880.0,557.9"
+            fill="none" stroke="#54a24b" stroke-width="2"/>
+    <circle cx="70.0" cy="747.6" r="3" fill="#54a24b"/>
+    <circle cx="135.3" cy="747.1" r="3" fill="#54a24b"/>
+    <circle cx="200.7" cy="750.5" r="3" fill="#54a24b"/>
+    <circle cx="266.0" cy="750.5" r="3" fill="#54a24b"/>
+    <circle cx="331.3" cy="750.4" r="3" fill="#54a24b"/>
+    <circle cx="396.6" cy="749.6" r="3" fill="#54a24b"/>
+    <circle cx="462.0" cy="748.8" r="3" fill="#54a24b"/>
+    <circle cx="527.3" cy="744.4" r="3" fill="#54a24b"/>
+    <circle cx="592.6" cy="741.3" r="3" fill="#54a24b"/>
+    <circle cx="618.7" cy="729.9" r="3" fill="#54a24b"/>
+    <circle cx="658.0" cy="725.5" r="3" fill="#54a24b"/>
+    <circle cx="723.3" cy="706.5" r="3" fill="#54a24b"/>
+    <circle cx="749.3" cy="697.0" r="3" fill="#54a24b"/>
+    <circle cx="788.6" cy="673.6" r="3" fill="#54a24b"/>
+    <circle cx="854.0" cy="603.5" r="3" fill="#54a24b"/>
+    <circle cx="880.0" cy="557.9" r="3" fill="#54a24b"/>
+    <text x="475.0" y="798" text-anchor="middle" fill="#555">copy size (log scale); right edge is 2560x2160 f32 = 22.1
+        MB
+    </text>
+    <rect x="80" y="816" width="12" height="12" fill="#4c78a8"/>
+    <text x="98" y="826">memcpy_htod</text>
+    <rect x="250" y="816" width="12" height="12" fill="#f58518"/>
+    <text x="268" y="826">memcpy_htod_reused</text>
+    <rect x="420" y="816" width="12" height="12" fill="#54a24b"/>
+    <text x="438" y="826">memcpy_htod_unstaged</text>
+</svg>

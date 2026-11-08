@@ -1,0 +1,50 @@
+# device: AMD Steam Machine (RADV NAVI33)
+path,bytes,label,ns
+memcpy_htod,4096,4 KiB,71430
+memcpy_htod_reused,4096,4 KiB,71007
+memcpy_htod_unstaged,4096,4 KiB,138002
+memcpy_htod,8192,8 KiB,71407
+memcpy_htod_reused,8192,8 KiB,70077
+memcpy_htod_unstaged,8192,8 KiB,143355
+memcpy_htod,16384,16 KiB,71590
+memcpy_htod_reused,16384,16 KiB,71681
+memcpy_htod_unstaged,16384,16 KiB,105584
+memcpy_htod,32768,32 KiB,58633
+memcpy_htod_reused,32768,32 KiB,61425
+memcpy_htod_unstaged,32768,32 KiB,105808
+memcpy_htod,65536,64 KiB,63686
+memcpy_htod_reused,65536,64 KiB,64839
+memcpy_htod_unstaged,65536,64 KiB,107536
+memcpy_htod,131072,128 KiB,72563
+memcpy_htod_reused,131072,128 KiB,71442
+memcpy_htod_unstaged,131072,128 KiB,115674
+memcpy_htod,262144,256 KiB,87673
+memcpy_htod_reused,262144,256 KiB,87834
+memcpy_htod_unstaged,262144,256 KiB,124950
+memcpy_htod,524288,512 KiB,129600
+memcpy_htod_reused,524288,512 KiB,126009
+memcpy_htod_unstaged,524288,512 KiB,173702
+memcpy_htod,1048576,1024 KiB,180581
+memcpy_htod_reused,1048576,1024 KiB,181525
+memcpy_htod_unstaged,1048576,1024 KiB,208038
+memcpy_htod,1382400,640x540,206181
+memcpy_htod_reused,1382400,640x540,207479
+memcpy_htod_unstaged,1382400,640x540,335614
+memcpy_htod,2097152,2048 KiB,291530
+memcpy_htod_reused,2097152,2048 KiB,284232
+memcpy_htod_unstaged,2097152,2048 KiB,384967
+memcpy_htod,4194304,4096 KiB,520989
+memcpy_htod_reused,4194304,4096 KiB,501771
+memcpy_htod_unstaged,4194304,4096 KiB,596608
+memcpy_htod,5529600,1280x1080,698328
+memcpy_htod_reused,5529600,1280x1080,638759
+memcpy_htod_unstaged,5529600,1280x1080,702539
+memcpy_htod,8388608,8192 KiB,1218916
+memcpy_htod_reused,8388608,8192 KiB,1029125
+memcpy_htod_unstaged,8388608,8192 KiB,962567
+memcpy_htod,16777216,16384 KiB,2233824
+memcpy_htod_reused,16777216,16384 KiB,2220055
+memcpy_htod_unstaged,16777216,16384 KiB,1743909
+memcpy_htod,22118400,2560x2160,3198530
+memcpy_htod_reused,22118400,2560x2160,3198533
+memcpy_htod_unstaged,22118400,2560x2160,2252763
