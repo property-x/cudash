@@ -30,7 +30,7 @@ fn main() -> Result<(), DriverError> {
     // load SPIR-V
     let now = Instant::now();
 
-    let my_module = ctx.load_module(Spirv::from_binary(KERNEL_MY_STRUCT.to_vec()))?;
+    let my_module = ctx.load_module(Spirv::from_binary(KERNEL_MY_STRUCT))?;
     let my_function = my_module.load_function("my_struct_kernel")?;
 
     println!("Time taken to load SPIR-V: {:.2?}", now.elapsed());

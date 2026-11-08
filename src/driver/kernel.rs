@@ -1,6 +1,7 @@
 //! Kernels: SPIR-V compute shaders, launched like cudarc launches PTX.
 
 use std::{
+    borrow::Cow,
     collections::HashMap,
     ffi::CString,
     io::Cursor,
@@ -32,7 +33,7 @@ pub struct Spirv(SpirvKind);
 #[derive(Debug, Clone)]
 enum SpirvKind {
     File(PathBuf),
-    Binary(Vec<u8>),
+    Binary(Cow<'static, [u8]>),
 }
 
 impl Spirv {
@@ -41,8 +42,9 @@ impl Spirv {
         Self(SpirvKind::File(path.into()))
     }
 
-    pub fn from_binary(data: Vec<u8>) -> Self {
-        Self(SpirvKind::Binary(data))
+    /// Takes `include_bytes!` output without copying it.
+    pub fn from_binary(data: impl Into<Cow<'static, [u8]>>) -> Self {
+        Self(SpirvKind::Binary(data.into()))
     }
 }
 
@@ -56,7 +58,8 @@ impl CudaContext {
     pub fn load_module(self: &Arc<Self>, module: Spirv) -> Result<Arc<CudaModule>, DriverError> {
         let bytes = match module.0 {
             SpirvKind::File(path) => std::fs::read(&path)
-                .map_err(|e| DriverError::InvalidModule(format!("{}: {e}", path.display())))?,
+                .map_err(|e| DriverError::InvalidModule(format!("{}: {e}", path.display())))?
+                .into(),
             SpirvKind::Binary(bytes) => bytes,
         };
         let words = ash::util::read_spv(&mut Cursor::new(bytes))
