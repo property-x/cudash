@@ -19,6 +19,21 @@ fn nvidia_present() -> bool {
     })
 }
 
+fn other_vendor_present() -> bool {
+    let Ok(count) = cudash::driver::CudaContext::device_count() else {
+        return false;
+    };
+    (0..count as usize)
+        .filter_map(|ordinal| cudash::driver::CudaContext::new(ordinal).ok())
+        .any(|ctx| {
+            let properties = unsafe {
+                ctx.vk_instance()
+                    .get_physical_device_properties(ctx.vk_physical_device())
+            };
+            properties.vendor_id != 0x10de
+        })
+}
+
 /// Decides whether a scenario runs here. A skipped scenario prints why.
 pub fn selected(
     feature: &gherkin::Feature,
@@ -46,6 +61,8 @@ pub fn selected(
         Some("needs two NVIDIA GPUs")
     } else if has("no-vulkan") {
         Some("needs a machine without a Vulkan loader")
+    } else if has("other-vendor") && !other_vendor_present() {
+        Some("needs a non-NVIDIA Vulkan 1.3 GPU")
     } else if has("nvidia") && !require_nvidia && !nvidia_present() {
         Some("needs an NVIDIA GPU with CUDA")
     } else {

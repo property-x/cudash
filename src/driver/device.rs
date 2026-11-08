@@ -3,7 +3,7 @@
 use std::{
     ffi::CStr,
     ptr::NonNull,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use ash::{ext, vk};
@@ -15,8 +15,33 @@ use super::{DriverError, stream::Tracking};
 // constants, and `launch` returns an error above the device's limit.
 const API_VERSION: u32 = vk::API_VERSION_1_3;
 
-pub(crate) struct Device {
+struct VulkanInstance {
     _entry: ash::Entry,
+    instance: ash::Instance,
+}
+
+static VULKAN_INSTANCE: OnceLock<Result<VulkanInstance, String>> = OnceLock::new();
+
+fn shared_instance() -> Result<&'static ash::Instance, DriverError> {
+    let shared = VULKAN_INSTANCE.get_or_init(|| unsafe {
+        let entry = ash::Entry::load().map_err(|e| e.to_string())?;
+        let app = vk::ApplicationInfo::default().api_version(API_VERSION);
+        let info = vk::InstanceCreateInfo::default().application_info(&app);
+        let instance = entry
+            .create_instance(&info, None)
+            .map_err(|e| e.to_string())?;
+        Ok(VulkanInstance {
+            _entry: entry,
+            instance,
+        })
+    });
+    shared
+        .as_ref()
+        .map(|shared| &shared.instance)
+        .map_err(|error| DriverError::NoVulkan(error.clone()))
+}
+
+pub(crate) struct Device {
     pub(crate) instance: ash::Instance,
     pub(crate) physical_device: vk::PhysicalDevice,
     pub(crate) device: ash::Device,
@@ -40,19 +65,10 @@ struct HostImport {
 
 /// Loads Vulkan and lists suitable GPUs, discrete ones first, so ordinal 0 is the
 /// one a CUDA user would expect.
-fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), DriverError> {
+fn enumerate() -> Result<(&'static ash::Instance, Vec<vk::PhysicalDevice>), DriverError> {
     unsafe {
-        let entry = ash::Entry::load().map_err(|e| DriverError::NoVulkan(e.to_string()))?;
-        let app = vk::ApplicationInfo::default().api_version(API_VERSION);
-        let info = vk::InstanceCreateInfo::default().application_info(&app);
-        let instance = entry.create_instance(&info, None)?;
-        let mut devices = match instance.enumerate_physical_devices() {
-            Ok(devices) => devices,
-            Err(e) => {
-                instance.destroy_instance(None);
-                return Err(e.into());
-            }
-        };
+        let instance = shared_instance()?;
+        let mut devices = instance.enumerate_physical_devices()?;
         devices.retain(|&pd| {
             let properties = instance.get_physical_device_properties(pd);
             properties.api_version >= API_VERSION
@@ -63,7 +79,7 @@ fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), D
             let kind = instance.get_physical_device_properties(pd).device_type;
             kind != vk::PhysicalDeviceType::DISCRETE_GPU
         });
-        Ok((entry, instance, devices))
+        Ok((instance, devices))
     }
 }
 
@@ -102,26 +118,22 @@ fn missing_required_feature(
 
 impl Device {
     pub(crate) fn count() -> Result<i32, DriverError> {
-        let (_entry, instance, devices) = enumerate()?;
-        unsafe { instance.destroy_instance(None) };
+        let (_instance, devices) = enumerate()?;
         Ok(devices.len() as i32)
     }
 
     pub(crate) fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
-        let (entry, instance, devices) = enumerate()?;
+        let (instance, devices) = enumerate()?;
         let created = devices
             .get(ordinal)
             .ok_or(DriverError::NoSuchDevice(ordinal))
             .and_then(|&pd| {
-                let extensions = available_extensions(&instance, pd);
-                unsafe { Self::create(&instance, pd, &extensions) }.map(|c| (c, extensions))
+                let extensions = available_extensions(instance, pd);
+                unsafe { Self::create(instance, pd, &extensions) }.map(|c| (c, extensions))
             });
         let ((device, queue_family, physical_device), extensions) = match created {
             Ok(created) => created,
-            Err(e) => {
-                unsafe { instance.destroy_instance(None) };
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
         unsafe {
             let mut id = vk::PhysicalDeviceIDProperties::default();
@@ -134,7 +146,7 @@ impl Device {
             instance.get_physical_device_properties2(physical_device, &mut properties);
             let properties = properties.properties;
             let host_import = has_host_import.then(|| HostImport {
-                functions: ext::external_memory_host::Device::new(&instance, &device),
+                functions: ext::external_memory_host::Device::new(instance, &device),
                 alignment: import.min_imported_host_pointer_alignment,
             });
             Ok(Arc::new(Self {
@@ -142,8 +154,7 @@ impl Device {
                 memory: instance.get_physical_device_memory_properties(physical_device),
                 uuid: id.device_uuid,
                 properties,
-                _entry: entry,
-                instance,
+                instance: instance.clone(),
                 physical_device,
                 device,
                 queue_family,
@@ -249,7 +260,6 @@ impl Drop for Device {
         unsafe {
             let _ = self.device.device_wait_idle();
             self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
         }
     }
 }

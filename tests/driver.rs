@@ -236,3 +236,13 @@ fn ptx_matches_the_spirv_kernels() {
         assert_eq!(signature.matches(".param").count(), params, "{signature}");
     }
 }
+
+#[test]
+fn contexts_can_be_created_and_dropped_repeatedly() {
+    for iteration in 0..32 {
+        let ctx = CudaContext::new(0)
+            .unwrap_or_else(|error| panic!("device unavailable at iteration {iteration}: {error}"));
+        assert!(!ctx.name().unwrap().is_empty());
+        drop(ctx);
+    }
+}
