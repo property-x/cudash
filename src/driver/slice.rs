@@ -8,7 +8,12 @@ use std::{
 
 use ash::vk;
 
-use super::{DriverError, context::CudaContext, device::Buffer, stream::CudaStream};
+use super::{
+    DriverError,
+    context::CudaContext,
+    device::Buffer,
+    stream::{CudaStream, SyncOnDrop},
+};
 
 /// Types that are plain data with the same layout on the GPU and the host.
 ///
@@ -113,12 +118,31 @@ pub trait DeviceSlice<T> {
 pub trait DevicePtr<T>: DeviceSlice<T> {
     #[doc(hidden)]
     fn raw(&self) -> RawRange<'_>;
+
+    /// The buffer device address of the first element, for reading on `stream`, as in
+    /// cudarc. `stream` waits for earlier writes from other streams. Drop the guard after
+    /// queuing the work that uses the address: the stream then records the read and keeps
+    /// the memory alive until that work has finished.
+    ///
+    /// The address is only valid on this context's Vulkan device, not in CUDA.
+    fn device_ptr<'a>(&'a self, stream: &'a CudaStream) -> (u64, SyncOnDrop<'a>) {
+        let raw = self.raw();
+        let address = raw.buffer.address + raw.offset;
+        (address, SyncOnDrop::new(stream, raw.buffer, false))
+    }
 }
 
 /// Device memory that can be written: [`CudaSlice`] or [`CudaViewMut`].
 pub trait DevicePtrMut<T>: DeviceSlice<T> {
     #[doc(hidden)]
     fn raw_mut(&mut self) -> RawRange<'_>;
+
+    /// [`DevicePtr::device_ptr`] for writing: `stream` also waits for earlier reads.
+    fn device_ptr_mut<'a>(&'a mut self, stream: &'a CudaStream) -> (u64, SyncOnDrop<'a>) {
+        let raw = self.raw_mut();
+        let address = raw.buffer.address + raw.offset;
+        (address, SyncOnDrop::new(stream, raw.buffer, true))
+    }
 }
 
 /// Resolves range bounds against a length, returning `None` if they're out of range.

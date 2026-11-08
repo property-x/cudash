@@ -176,6 +176,16 @@ impl StreamCore {
         }
     }
 
+    /// An empty submission that orders this stream after `buffer`'s earlier uses, records
+    /// a use of it, and keeps it alive until everything queued so far has finished. If
+    /// submitting fails, which means the device is lost or out of memory, it blocks instead.
+    fn mark_use(&self, buffer: &Arc<Buffer>, write: bool) {
+        let (reads, writes) = if write { (vec![], vec![buffer]) } else { (vec![buffer], vec![]) };
+        if self.submit(&reads, &writes, Vec::new(), |_, _| {}).is_err() {
+            let _ = wait_for_gpu(buffer).and_then(|()| self.synchronize());
+        }
+    }
+
     pub(crate) fn submit(
         &self,
         reads: &[&Arc<Buffer>],
@@ -273,6 +283,41 @@ impl StreamCore {
             _keep: keep,
         });
         Ok(point)
+    }
+}
+
+/// Returned with an address by `device_ptr`, like cudarc's `SyncOnDrop`. On drop, the stream
+/// records that its work so far used the buffer, and keeps the buffer alive until that work
+/// has finished.
+#[must_use]
+pub struct SyncOnDrop<'a> {
+    stream: &'a CudaStream,
+    buffer: &'a Arc<Buffer>,
+    write: bool,
+}
+
+impl<'a> SyncOnDrop<'a> {
+    pub(crate) fn new(stream: &'a CudaStream, buffer: &'a Arc<Buffer>, write: bool) -> Self {
+        stream.core.mark_use(buffer, write);
+        Self {
+            stream,
+            buffer,
+            write,
+        }
+    }
+}
+
+impl Drop for SyncOnDrop<'_> {
+    fn drop(&mut self) {
+        self.stream.core.mark_use(self.buffer, self.write);
+    }
+}
+
+impl std::fmt::Debug for SyncOnDrop<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncOnDrop")
+            .field("write", &self.write)
+            .finish_non_exhaustive()
     }
 }
 
@@ -736,6 +781,23 @@ mod tests {
                 true
             }
         }
+    }
+
+    #[test]
+    fn device_ptr_keeps_the_buffer_until_the_stream_is_done() {
+        let ctx = CudaContext::new(0).unwrap();
+        let (stream, other) = (ctx.default_stream(), ctx.new_stream().unwrap());
+        let slice = stream.clone_htod(&[1u32, 2, 3]).unwrap();
+        stream.synchronize().unwrap();
+        let buffer = slice.raw().buffer.clone();
+        let view = slice.slice(1..);
+        let (address, guard) = view.device_ptr(&other);
+        assert_eq!(address, buffer.address + 4);
+        drop(guard);
+        drop(slice);
+        assert!(Arc::strong_count(&buffer) > 1, "the guard's submission holds it");
+        other.synchronize().unwrap();
+        assert_eq!(Arc::strong_count(&buffer), 1);
     }
 
     #[test]

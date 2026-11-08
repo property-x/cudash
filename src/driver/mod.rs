@@ -35,4 +35,4 @@ pub use slice::{
     CudaSlice, CudaView, CudaViewMut, DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice, HostSlice,
     RawRange, ValidAsZeroBits,
 };
-pub use stream::CudaStream;
+pub use stream::{CudaStream, SyncOnDrop};
