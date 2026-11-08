@@ -180,7 +180,11 @@ impl StreamCore {
     /// a use of it, and keeps it alive until everything queued so far has finished. If
     /// submitting fails, which means the device is lost or out of memory, it blocks instead.
     fn mark_use(&self, buffer: &Arc<Buffer>, write: bool) {
-        let (reads, writes) = if write { (vec![], vec![buffer]) } else { (vec![buffer], vec![]) };
+        let (reads, writes) = if write {
+            (vec![], vec![buffer])
+        } else {
+            (vec![buffer], vec![])
+        };
         if self.submit(&reads, &writes, Vec::new(), |_, _| {}).is_err() {
             let _ = wait_for_gpu(buffer).and_then(|()| self.synchronize());
         }
@@ -795,7 +799,10 @@ mod tests {
         assert_eq!(address, buffer.address + 4);
         drop(guard);
         drop(slice);
-        assert!(Arc::strong_count(&buffer) > 1, "the guard's submission holds it");
+        assert!(
+            Arc::strong_count(&buffer) > 1,
+            "the guard's submission holds it"
+        );
         other.synchronize().unwrap();
         assert_eq!(Arc::strong_count(&buffer), 1);
     }

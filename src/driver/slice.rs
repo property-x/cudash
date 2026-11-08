@@ -147,7 +147,8 @@ pub trait DevicePtrMut<T>: DeviceSlice<T> {
 
 /// Whether `len` elements of `S` fit in `bytes`. Unlike cudarc, an overflowing `len` doesn't fit.
 fn fits<S>(len: usize, bytes: usize) -> bool {
-    len.checked_mul(size_of::<S>()).is_some_and(|needed| needed <= bytes)
+    len.checked_mul(size_of::<S>())
+        .is_some_and(|needed| needed <= bytes)
 }
 
 /// Resolves range bounds against a length, returning `None` if they're out of range.
