@@ -3,6 +3,17 @@ name = "cudash"
 version = "0.1.0"
 edition = "2024"
 description = "A minimal and safe api over the vulkan toolkit. Inspired by cudarc's basic driver API with optional interop."
+license = "Apache-2.0"
+license-file = "LICENSE.txt"
+repository = "https://github.com/property-x/cudash"
+
+keywords = ["gpu", "vulkan", "cuda"]
+categories = [
+    "api-bindings",
+    "hardware-support",
+    "memory-management",
+    "science",
+]
 
 [dependencies]
 ash = "0.38"
