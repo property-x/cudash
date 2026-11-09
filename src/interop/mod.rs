@@ -115,6 +115,15 @@ pub struct Interop {
     stream: Arc<CudaStream>,
 }
 
+impl std::fmt::Debug for Interop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Interop")
+            .field("ordinal", &self.vulkan.device.ordinal)
+            .field("stream", &self.stream)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Interop {
     /// Pairs `ctx` with a CUDA stream, checking they're on the same GPU.
     ///
