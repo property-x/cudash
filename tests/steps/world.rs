@@ -4,7 +4,7 @@
 //! buffer's element type is known, and `Ty::normalize` turns an expected value into the
 //! form the buffer stores, so comparisons are exact for every type.
 
-// The interop half (`IBuf`, `sem`, `write_interop`, ...) waits for the steps in `interop.rs`, which
+// The interop half (`sem`, `icx`, ...) waits for the steps in `interop.rs`, which
 // aren't written yet. Remove this once they use it.
 #![allow(dead_code, unused_imports)]
 
@@ -111,11 +111,10 @@ Copy
     fn from_scalar(value: Scalar) -> Self;
     fn to_scalar(self) -> Scalar;
     fn wrap_driver(slice: driver::CudaSlice<Self>) -> DBuf;
-    fn wrap_interop(slice: interop::SharedBuffer<Self>) -> IBuf;
 }
 
 macro_rules! int_element {
-    ($t:ty, $ty:ident, $dv:ident, $iv:ident) => {
+    ($t:ty, $ty:ident, $dv:ident) => {
         impl Element for $t {
             const TY: Ty = Ty::$ty;
             fn from_scalar(value: Scalar) -> Self {
@@ -132,15 +131,12 @@ macro_rules! int_element {
             fn wrap_driver(slice: driver::CudaSlice<Self>) -> DBuf {
                 DBuf::$dv(slice)
             }
-            fn wrap_interop(slice: interop::SharedBuffer<Self>) -> IBuf {
-                IBuf::$iv(slice)
-            }
         }
     };
 }
 
 macro_rules! float_element {
-    ($t:ty, $ty:ident, $dv:ident, $iv:ident) => {
+    ($t:ty, $ty:ident, $dv:ident) => {
         impl Element for $t {
             const TY: Ty = Ty::$ty;
             fn from_scalar(value: Scalar) -> Self {
@@ -152,21 +148,18 @@ macro_rules! float_element {
             fn wrap_driver(slice: driver::CudaSlice<Self>) -> DBuf {
                 DBuf::$dv(slice)
             }
-            fn wrap_interop(slice: interop::SharedBuffer<Self>) -> IBuf {
-                IBuf::$iv(slice)
-            }
         }
     };
 }
 
-int_element!(u8, U8, U8, U8);
-int_element!(u16, U16, U16, U16);
-int_element!(u32, U32, U32, U32);
-int_element!(u64, U64, U64, U64);
-int_element!(i32, I32, I32, I32);
-int_element!(i64, I64, I64, I64);
-float_element!(f32, F32, F32, F32);
-float_element!(f64, F64, F64, F64);
+int_element!(u8, U8, U8);
+int_element!(u16, U16, U16);
+int_element!(u32, U32, U32);
+int_element!(u64, U64, U64);
+int_element!(i32, I32, I32);
+int_element!(i64, I64, I64);
+float_element!(f32, F32, F32);
+float_element!(f64, F64, F64);
 
 /// Runs `$body` with `$t` bound to the Rust type for a [`Ty`].
 macro_rules! with_ty {
@@ -221,19 +214,7 @@ pub enum DBuf {
     F64(driver::CudaSlice<f64>),
 }
 
-/// A buffer allocated by `cudash::interop`, of any element type.
-pub enum IBuf {
-    U8(interop::SharedBuffer<u8>),
-    U16(interop::SharedBuffer<u16>),
-    U32(interop::SharedBuffer<u32>),
-    U64(interop::SharedBuffer<u64>),
-    I32(interop::SharedBuffer<i32>),
-    I64(interop::SharedBuffer<i64>),
-    F32(interop::SharedBuffer<f32>),
-    F64(interop::SharedBuffer<f64>),
-}
-
-/// Matches a [`DBuf`] or [`IBuf`] and runs `$body` with the inner buffer bound to `$s`.
+/// Matches a [`DBuf`] and runs `$body` with the inner buffer bound to `$s`.
 macro_rules! on_buf {
     ($buf:expr, $s:ident => $body:expr) => {
         match $buf {
@@ -249,22 +230,6 @@ macro_rules! on_buf {
     };
 }
 pub(crate) use on_buf;
-
-macro_rules! on_ibuf {
-    ($buf:expr, $s:ident => $body:expr) => {
-        match $buf {
-            IBuf::U8($s) => $body,
-            IBuf::U16($s) => $body,
-            IBuf::U32($s) => $body,
-            IBuf::U64($s) => $body,
-            IBuf::I32($s) => $body,
-            IBuf::I64($s) => $body,
-            IBuf::F32($s) => $body,
-            IBuf::F64($s) => $body,
-        }
-    };
-}
-pub(crate) use on_ibuf;
 
 impl DBuf {
     pub fn ty(&self) -> Ty {
@@ -328,51 +293,6 @@ impl DBuf {
     }
 }
 
-impl IBuf {
-    pub fn ty(&self) -> Ty {
-        match self {
-            IBuf::U8(_) => Ty::U8,
-            IBuf::U16(_) => Ty::U16,
-            IBuf::U32(_) => Ty::U32,
-            IBuf::U64(_) => Ty::U64,
-            IBuf::I32(_) => Ty::I32,
-            IBuf::I64(_) => Ty::I64,
-            IBuf::F32(_) => Ty::F32,
-            IBuf::F64(_) => Ty::F64,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        on_ibuf!(self, s => s.len())
-    }
-
-    pub fn num_bytes(&self) -> usize {
-        on_ibuf!(self, s => s.num_bytes())
-    }
-
-    pub fn vk_buffer(&self) -> cudash::ash::vk::Buffer {
-        on_ibuf!(self, s => s.vk_buffer())
-    }
-
-    pub fn read_on(
-        &self,
-        stream: &Arc<interop::cudarc::driver::CudaStream>,
-    ) -> Result<Vec<Scalar>, String> {
-        on_ibuf!(self, s => {
-            let host = stream.clone_dtoh(s).map_err(|e| format!("{e:?}"))?;
-            Ok(host.into_iter().map(Element::to_scalar).collect())
-        })
-    }
-
-    pub fn write_on(
-        &mut self,
-        stream: &Arc<interop::cudarc::driver::CudaStream>,
-        values: &[Scalar],
-    ) -> Result<(), String> {
-        on_ibuf!(self, s => write_interop(stream, s, values))
-    }
-}
-
 /// Wraps a typed driver slice in the [`DBuf`] for its element type.
 pub fn wrap<T: Element>(slice: driver::CudaSlice<T>) -> DBuf {
     T::wrap_driver(slice)
@@ -395,18 +315,6 @@ fn write_driver<T: Element>(
     let mut view = slice.slice_mut(start..end);
     stream
         .memcpy_htod(&host, &mut view)
-        .map_err(|e| format!("{e:?}"))
-}
-
-/// Copies host values into an interop buffer, from its own cudarc stream.
-fn write_interop<T: Element>(
-    stream: &Arc<interop::cudarc::driver::CudaStream>,
-    slice: &mut interop::SharedBuffer<T>,
-    values: &[Scalar],
-) -> Result<(), String> {
-    let host: Vec<T> = values.iter().map(|v| T::from_scalar(*v)).collect();
-    stream
-        .memcpy_htod(&host, slice)
         .map_err(|e| format!("{e:?}"))
 }
 
@@ -447,7 +355,6 @@ pub struct World {
 
     // cudash::interop, for the CUDA–Vulkan features
     pub icx: Option<Arc<interop::cudarc::driver::CudaContext>>,
-    pub ibufs: HashMap<String, IBuf>,
     pub sem: Option<interop::SharedSemaphore>,
     pub signal: u64,
     pub wait: Option<bool>,
@@ -459,7 +366,6 @@ impl fmt::Debug for World {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("World")
             .field("dbufs", &self.dbufs.len())
-            .field("ibufs", &self.ibufs.len())
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
@@ -494,34 +400,15 @@ impl World {
             .unwrap_or_else(|| panic!("no driver buffer named {name:?}"))
     }
 
-    pub fn ibuf(&self, name: &str) -> &IBuf {
-        self.ibufs
-            .get(name)
-            .unwrap_or_else(|| panic!("no interop buffer named {name:?}"))
-    }
-
     pub fn icx(&self) -> &Arc<interop::cudarc::driver::CudaContext> {
         self.icx.as_ref().expect("an NVIDIA GPU was set up")
     }
 
-    pub fn ibuf_mut(&mut self, name: &str) -> &mut IBuf {
-        self.ibufs
-            .get_mut(name)
-            .unwrap_or_else(|| panic!("no interop buffer named {name:?}"))
-    }
-
-    /// The values and element type of any named buffer, from either layer.
+    /// The values and element type of a named buffer.
     pub fn read_named(&self, name: &str) -> (Vec<Scalar>, Ty) {
-        if let Some(buf) = self.dbufs.get(name) {
-            let values = buf
-                .read()
-                .unwrap_or_else(|e| panic!("reading {name:?}: {e}"));
-            return (values, buf.ty());
-        }
-        let buf = self.ibuf(name);
-        let stream = self.icx().default_stream();
+        let buf = self.dbuf(name);
         let values = buf
-            .read_on(&stream)
+            .read()
             .unwrap_or_else(|e| panic!("reading {name:?}: {e}"));
         (values, buf.ty())
     }

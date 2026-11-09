@@ -22,9 +22,9 @@ Feature: One Slang kernel on both backends
     And the Slang SPIR-V build of "kernel" as "slang" with entry point "computeMain"
     And the Slang PTX build of "kernel" as "slang_ptx" with entry point "computeMain"
     And a zeroed buffer "out" of 256 f32 elements
-    And an interop buffer "outp" of 256 f32 elements
+    And a zeroed buffer "outp" of 256 f32 elements
     When I launch "slang" on "out" with n 256
-    And I launch "slang_ptx" on "outp" with n 256 through cudarc
+    And I launch "slang_ptx" on "outp" with n 256 through cudarc on a lend of "outp"
     Then the buffer "out" equals the buffer "outp"
 
   @vulkan

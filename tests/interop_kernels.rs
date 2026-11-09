@@ -1,13 +1,16 @@
-//! Launching kernels on shared buffers with real cudarc: scalar and pointer arguments, grid
-//! sizes, views and ordering on one stream.
+//! Launching real cudarc kernels on cudash slices lent with `lend` and `lend_mut`: scalar and
+//! pointer arguments, grid sizes, views and ordering on one stream.
 //! These need an NVIDIA GPU and print SKIPPED (or panic, with CUDASH_REQUIRE_NVIDIA set).
 
 mod common;
 
 use common::*;
-use cudash::interop::cudarc::{
-    driver::{LaunchConfig, PushKernelArg},
-    nvrtc::compile_ptx,
+use cudash::interop::{
+    AsCuda,
+    cudarc::{
+        driver::{LaunchConfig, PushKernelArg},
+        nvrtc::compile_ptx,
+    },
 };
 
 #[test]
@@ -15,23 +18,26 @@ fn float_scalar_argument() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (ctx, interop) = (&gpu.cuda, &gpu.interop);
-    let stream = interop.stream();
-    let f = load_kernel(ctx, AXPY_CU, "axpy")?;
+    let stream = &gpu.stream;
+    let f = load_kernel(&gpu.cuda, AXPY_CU, "axpy")?;
 
     let n = 1000usize;
     let x_host: Vec<f32> = (0..n).map(|i| i as f32).collect();
-    let x = buf_from(interop, &x_host)?;
+    let x = stream.clone_htod(&x_host)?;
     let mut y = stream.clone_htod(&vec![1.0f32; n])?;
     let a = 2.5f32;
     let n_arg = n as i32;
 
-    let mut builder = stream.launch_builder(&f);
-    builder.arg(&mut y);
-    builder.arg(&x);
-    builder.arg(&a);
-    builder.arg(&n_arg);
-    unsafe { builder.launch(LaunchConfig::for_num_elems(n as u32)) }?;
+    {
+        let (x, mut y) = (x.as_cuda()?, y.as_cuda_mut()?);
+        let cuda = y.stream().clone();
+        let mut builder = cuda.launch_builder(&f);
+        builder.arg(&mut y);
+        builder.arg(&x);
+        builder.arg(&a);
+        builder.arg(&n_arg);
+        unsafe { builder.launch(LaunchConfig::for_num_elems(n as u32)) }?;
+    }
 
     let want: Vec<f32> = x_host.iter().map(|x| 2.5 * x + 1.0).collect();
     assert_eq!(stream.clone_dtoh(&y)?, want);
@@ -43,19 +49,22 @@ fn i64_scalar_argument_with_negative_values() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (ctx, interop) = (&gpu.cuda, &gpu.interop);
-    let stream = interop.stream();
-    let f = load_kernel(ctx, ADD_I64_CU, "add_i64")?;
+    let stream = &gpu.stream;
+    let f = load_kernel(&gpu.cuda, ADD_I64_CU, "add_i64")?;
 
-    let mut data = buf_from(interop, &[-5i64, 0, 7])?;
+    let mut data = stream.clone_htod(&[-5i64, 0, 7])?;
     let k = -10i64;
     let n = 3i32;
 
-    let mut builder = stream.launch_builder(&f);
-    builder.arg(&mut data);
-    builder.arg(&k);
-    builder.arg(&n);
-    unsafe { builder.launch(LaunchConfig::for_num_elems(3)) }?;
+    {
+        let mut lent = data.as_cuda_mut()?;
+        let cuda = lent.stream().clone();
+        let mut builder = cuda.launch_builder(&f);
+        builder.arg(&mut lent);
+        builder.arg(&k);
+        builder.arg(&n);
+        unsafe { builder.launch(LaunchConfig::for_num_elems(3)) }?;
+    }
 
     assert_eq!(stream.clone_dtoh(&data)?, [-15i64, -10, -3]);
     Ok(())
@@ -67,18 +76,21 @@ fn launch_covers_a_million_elements() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (ctx, interop) = (&gpu.cuda, &gpu.interop);
-    let stream = interop.stream();
-    let f = load_kernel(ctx, FILL_INDEX_CU, "fill_index")?;
+    let stream = &gpu.stream;
+    let f = load_kernel(&gpu.cuda, FILL_INDEX_CU, "fill_index")?;
 
     let n = 1_000_000usize;
-    let mut out = buf::<u64>(interop, n)?;
+    let mut out = stream.alloc_zeros::<u64>(n)?;
     let n_arg = n as i32;
 
-    let mut builder = stream.launch_builder(&f);
-    builder.arg(&mut out);
-    builder.arg(&n_arg);
-    unsafe { builder.launch(LaunchConfig::for_num_elems(n as u32)) }?;
+    {
+        let mut lent = out.as_cuda_mut()?;
+        let cuda = lent.stream().clone();
+        let mut builder = cuda.launch_builder(&f);
+        builder.arg(&mut lent);
+        builder.arg(&n_arg);
+        unsafe { builder.launch(LaunchConfig::for_num_elems(n as u32)) }?;
+    }
 
     let got = stream.clone_dtoh(&out)?;
     let wrong = got
@@ -100,12 +112,11 @@ fn explicit_launch_config_with_bounds_check() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (ctx, interop) = (&gpu.cuda, &gpu.interop);
-    let stream = interop.stream();
-    let f = load_kernel(ctx, FILL_INDEX_CU, "fill_index")?;
+    let stream = &gpu.stream;
+    let f = load_kernel(&gpu.cuda, FILL_INDEX_CU, "fill_index")?;
 
     let n = 1000usize;
-    let mut out = buf::<u64>(interop, n)?;
+    let mut out = stream.alloc_zeros::<u64>(n)?;
     let n_arg = n as i32;
     let cfg = LaunchConfig {
         grid_dim: (4, 1, 1),
@@ -113,37 +124,43 @@ fn explicit_launch_config_with_bounds_check() -> cudash::interop::Result<()> {
         shared_mem_bytes: 0,
     };
 
-    let mut builder = stream.launch_builder(&f);
-    builder.arg(&mut out);
-    builder.arg(&n_arg);
-    unsafe { builder.launch(cfg) }?;
+    {
+        let mut lent = out.as_cuda_mut()?;
+        let cuda = lent.stream().clone();
+        let mut builder = cuda.launch_builder(&f);
+        builder.arg(&mut lent);
+        builder.arg(&n_arg);
+        unsafe { builder.launch(cfg) }?;
+    }
 
     let want: Vec<u64> = (0..n as u64).collect();
     assert_eq!(stream.clone_dtoh(&out)?, want);
     Ok(())
 }
 
-/// A kernel gets a view of part of a buffer. Only the view's elements change.
+/// A kernel gets a view of part of a lent slice. Only the view's elements change.
 #[test]
 fn launch_on_a_mutable_view() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (ctx, interop) = (&gpu.cuda, &gpu.interop);
-    let stream = interop.stream();
-    let f = load_kernel(ctx, DOUBLE_CU, "double_in_place")?;
+    let stream = &gpu.stream;
+    let f = load_kernel(&gpu.cuda, DOUBLE_CU, "double_in_place")?;
 
-    let mut buf = buf_from(interop, &[1.0f32, 2.0, 3.0, 4.0, 5.0])?;
+    let mut data = stream.clone_htod(&[1.0f32, 2.0, 3.0, 4.0, 5.0])?;
     let n = 3i32;
     {
-        let mut view = buf.slice_mut(1..4);
-        let mut builder = stream.launch_builder(&f);
+        let mut lent = data.as_cuda_mut()?;
+        let cuda = lent.stream().clone();
+        let mut whole = lent.as_view_mut();
+        let mut view = whole.slice_mut(1..4);
+        let mut builder = cuda.launch_builder(&f);
         builder.arg(&mut view);
         builder.arg(&n);
         unsafe { builder.launch(LaunchConfig::for_num_elems(3)) }?;
     }
 
-    assert_eq!(stream.clone_dtoh(&buf)?, [1.0, 4.0, 6.0, 8.0, 5.0]);
+    assert_eq!(stream.clone_dtoh(&data)?, [1.0, 4.0, 6.0, 8.0, 5.0]);
     Ok(())
 }
 
@@ -153,17 +170,20 @@ fn consecutive_launches_run_in_order() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (ctx, interop) = (&gpu.cuda, &gpu.interop);
-    let stream = interop.stream();
-    let f = load_kernel(ctx, DOUBLE_CU, "double_in_place")?;
+    let stream = &gpu.stream;
+    let f = load_kernel(&gpu.cuda, DOUBLE_CU, "double_in_place")?;
 
-    let mut data = buf_from(interop, &[1.0f32, 2.0])?;
+    let mut data = stream.clone_htod(&[1.0f32, 2.0])?;
     let n = 2i32;
-    for _ in 0..3 {
-        let mut builder = stream.launch_builder(&f);
-        builder.arg(&mut data);
-        builder.arg(&n);
-        unsafe { builder.launch(LaunchConfig::for_num_elems(2)) }?;
+    {
+        let mut lent = data.as_cuda_mut()?;
+        for _ in 0..3 {
+            let cuda = lent.stream().clone();
+            let mut builder = cuda.launch_builder(&f);
+            builder.arg(&mut lent);
+            builder.arg(&n);
+            unsafe { builder.launch(LaunchConfig::for_num_elems(2)) }?;
+        }
     }
 
     assert_eq!(stream.clone_dtoh(&data)?, [8.0, 16.0]);
@@ -175,8 +195,7 @@ fn missing_kernel_name_is_an_error() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let ctx = &gpu.cuda;
-    assert!(load_kernel(ctx, SIN_CU, "no_such_kernel").is_err());
+    assert!(load_kernel(&gpu.cuda, SIN_CU, "no_such_kernel").is_err());
     Ok(())
 }
 

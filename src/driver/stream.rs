@@ -93,6 +93,9 @@ pub(crate) struct StreamCore {
     /// Staging buffers `memcpy_htod` reuses, and their sizes. One is free once this holds
     /// the only reference, because finished submissions drop theirs.
     staging: Mutex<Vec<(Arc<Buffer>, u64)>>,
+    /// The CUDA stream paired with this one, created by `interop` on first use.
+    #[cfg(feature = "cudarc")]
+    pub(crate) cuda: crate::interop::StreamSlot,
 }
 
 /// shortcut: at most this many staging buffers kept per stream, whatever their size.
@@ -128,6 +131,8 @@ impl StreamCore {
                 }),
                 reusable: Mutex::new(None),
                 staging: Mutex::new(Vec::new()),
+                #[cfg(feature = "cudarc")]
+                cuda: Default::default(),
             }))
         }
     }

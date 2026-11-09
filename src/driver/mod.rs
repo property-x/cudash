@@ -25,7 +25,7 @@ mod error;
 mod host;
 mod kernel;
 mod slice;
-mod stream;
+pub(crate) mod stream;
 
 pub use context::CudaContext;
 pub use error::DriverError;

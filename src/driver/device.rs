@@ -28,8 +28,10 @@ pub(crate) struct Device {
     pub(crate) ordinal: usize,
     host_import: Option<HostImport>,
     /// The optional extensions that were enabled.
-    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
     pub(crate) extensions: Vec<&'static CStr>,
+    /// The matching CUDA context, created by `interop` on first use.
+    #[cfg(feature = "cudarc")]
+    pub(crate) cuda: crate::interop::ContextSlot,
 }
 
 /// `VK_EXT_external_memory_host`, where the driver has it.
@@ -164,6 +166,8 @@ impl Device {
                 ordinal,
                 host_import,
                 extensions,
+                #[cfg(feature = "cudarc")]
+                cuda: Default::default(),
             }))
         }
     }
@@ -270,12 +274,50 @@ impl Drop for Device {
 
 /// A GPU buffer and its memory.
 pub(crate) struct Buffer {
-    device: Arc<Device>,
+    pub(crate) device: Arc<Device>,
     pub(crate) buffer: vk::Buffer,
     pub(crate) memory: vk::DeviceMemory,
     pub(crate) address: u64,
     mapped: Option<NonNull<u8>>,
     pub(crate) tracking: Mutex<Tracking>,
+    /// Size of the allocation, which can exceed the buffer's. CUDA imports exactly this.
+    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    pub(crate) allocation_size: u64,
+    /// `Some` if the memory can be exported as an opaque fd, holding whether it's a
+    /// dedicated allocation, which CUDA has to be told.
+    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    pub(crate) export: Option<Dedicated>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Dedicated(pub(crate) bool);
+
+/// Whether memory for `usage` can be exported to CUDA, and whether the driver then only
+/// allows dedicated allocations. Needs the export extensions, which the `cudarc` feature enables.
+fn export_support(device: &Device, usage: vk::BufferUsageFlags) -> Option<Dedicated> {
+    if !device.extensions.contains(&khr::external_memory_fd::NAME) {
+        return None;
+    }
+    let info = vk::PhysicalDeviceExternalBufferInfo::default()
+        .usage(usage)
+        .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+    let mut properties = vk::ExternalBufferProperties::default();
+    unsafe {
+        device
+            .instance
+            .get_physical_device_external_buffer_properties(
+                device.physical_device,
+                &info,
+                &mut properties,
+            )
+    };
+    let features = properties
+        .external_memory_properties
+        .external_memory_features;
+    use vk::ExternalMemoryFeatureFlags as F;
+    features
+        .contains(F::EXPORTABLE)
+        .then_some(Dedicated(features.contains(F::DEDICATED_ONLY)))
 }
 
 // SAFETY: handles aren't tied to a thread, and `mapped` is only written through
@@ -284,33 +326,56 @@ unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
 impl Buffer {
-    fn new(
-        device: &Arc<Device>,
-        size: u64,
-        usage: vk::BufferUsageFlags,
-        wanted: vk::MemoryPropertyFlags,
-        preferred: vk::MemoryPropertyFlags,
-    ) -> Result<Self, DriverError> {
-        let mut result = Self {
+    fn empty(device: &Arc<Device>) -> Self {
+        Self {
             device: device.clone(),
             buffer: vk::Buffer::null(),
             memory: vk::DeviceMemory::null(),
             address: 0,
             mapped: None,
             tracking: Mutex::default(),
-        };
+            allocation_size: 0,
+            export: None,
+        }
+    }
+
+    fn new(
+        device: &Arc<Device>,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        wanted: vk::MemoryPropertyFlags,
+        preferred: vk::MemoryPropertyFlags,
+        exportable: bool,
+    ) -> Result<Self, DriverError> {
+        let mut result = Self::empty(device);
         // Empty slices are legal in cudarc, and Vulkan has no empty buffers.
         if size == 0 {
             return Ok(result);
         }
         let vk_device = &device.device;
+        let handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+        let export = exportable.then(|| export_support(device, usage)).flatten();
         unsafe {
-            let info = vk::BufferCreateInfo::default()
+            let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
+            let mut info = vk::BufferCreateInfo::default()
                 .size(size)
                 .usage(usage)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            if export.is_some() {
+                info = info.push_next(&mut external);
+            }
             result.buffer = vk_device.create_buffer(&info, None)?;
-            let requirements = vk_device.get_buffer_memory_requirements(result.buffer);
+            let mut dedicated = vk::MemoryDedicatedRequirements::default();
+            let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+            let buffer_info = vk::BufferMemoryRequirementsInfo2::default().buffer(result.buffer);
+            vk_device.get_buffer_memory_requirements2(&buffer_info, &mut requirements);
+            let requirements = requirements.memory_requirements;
+            result.export = export.map(|Dedicated(only)| {
+                Dedicated(
+                    only || dedicated.requires_dedicated_allocation == vk::TRUE
+                        || dedicated.prefers_dedicated_allocation == vk::TRUE,
+                )
+            });
             let memory_type =
                 device.memory_type(requirements.memory_type_bits, wanted, preferred)?;
             let mut flags = vk::MemoryAllocateFlagsInfo::default();
@@ -319,11 +384,21 @@ impl Buffer {
             }
             // shortcut: one allocation per buffer, and Vulkan only guarantees 4096 of them.
             // Add a suballocator if real code hits that limit.
-            let allocate = vk::MemoryAllocateInfo::default()
+            let mut allocate = vk::MemoryAllocateInfo::default()
                 .allocation_size(requirements.size)
                 .memory_type_index(memory_type)
                 .push_next(&mut flags);
+            let mut export_info = vk::ExportMemoryAllocateInfo::default().handle_types(handle);
+            let mut dedicated_info =
+                vk::MemoryDedicatedAllocateInfo::default().buffer(result.buffer);
+            if let Some(Dedicated(dedicated)) = result.export {
+                allocate = allocate.push_next(&mut export_info);
+                if dedicated {
+                    allocate = allocate.push_next(&mut dedicated_info);
+                }
+            }
             result.memory = vk_device.allocate_memory(&allocate, None)?;
+            result.allocation_size = requirements.size;
             vk_device.bind_buffer_memory(result.buffer, result.memory, 0)?;
             if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
                 let info = vk::BufferDeviceAddressInfo::default().buffer(result.buffer);
@@ -341,7 +416,8 @@ impl Buffer {
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
         let local = vk::MemoryPropertyFlags::DEVICE_LOCAL;
         let none = vk::MemoryPropertyFlags::empty();
-        Ok(Arc::new(Self::new(device, size, usage, local, none)?))
+        // Exportable where the driver allows it, so `interop` can lend it to CUDA.
+        Ok(Arc::new(Self::new(device, size, usage, local, none, true)?))
     }
 
     /// Host-visible memory for moving data to or from the GPU.
@@ -355,6 +431,7 @@ impl Buffer {
             usage,
             host,
             vk::MemoryPropertyFlags::HOST_CACHED,
+            false,
         )?;
         if size > 0 {
             let flags = vk::MemoryMapFlags::empty();
@@ -388,14 +465,7 @@ impl Buffer {
         let size = (address + bytes.len()).next_multiple_of(alignment) - start;
         let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
         let vk_device = &device.device;
-        let mut result = Self {
-            device: device.clone(),
-            buffer: vk::Buffer::null(),
-            memory: vk::DeviceMemory::null(),
-            address: 0,
-            mapped: None,
-            tracking: Mutex::default(),
-        };
+        let mut result = Self::empty(device);
         unsafe {
             // ash 0.38 has no wrapper for this one.
             let mut pointer = vk::MemoryHostPointerPropertiesEXT::default();
@@ -475,6 +545,72 @@ impl Drop for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With the `cudarc` feature, device memory is exportable wherever the driver can export
+    /// it, so `interop::lend` works. Staging memory never is.
+    #[test]
+    fn device_memory_is_exportable_with_the_export_extensions() {
+        let device = Device::new(0).unwrap();
+        let can_export = device.extensions.contains(&khr::external_memory_fd::NAME);
+        assert!(cfg!(feature = "cudarc") || !can_export);
+        let buffer = Buffer::device_local(&device, 1000).unwrap();
+        assert_eq!(buffer.export.is_some(), can_export);
+        assert!(buffer.allocation_size >= 1000);
+        assert!(Buffer::staging(&device, 1000).unwrap().export.is_none());
+        assert!(Buffer::device_local(&device, 0).unwrap().export.is_none());
+    }
+
+    /// Exported memory re-imported into Vulkan aliases the original bytes, which is the
+    /// contract CUDA's import relies on. Host-visible here, so the test can compare bytes.
+    #[test]
+    fn exported_memory_round_trips() {
+        let device = Device::new(0).unwrap();
+        if !device.extensions.contains(&khr::external_memory_fd::NAME) {
+            eprintln!("SKIPPED: no opaque fd export");
+            return;
+        }
+        let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let none = vk::MemoryPropertyFlags::empty();
+        let usage = vk::BufferUsageFlags::TRANSFER_DST;
+        let buffer = Buffer::new(&device, 4096, usage, host, none, true).unwrap();
+        let Some(Dedicated(dedicated)) = buffer.export else {
+            panic!("the driver has the extension, but can't export this buffer");
+        };
+        let vk_device = &device.device;
+        let fd_functions = khr::external_memory_fd::Device::new(&device.instance, vk_device);
+        let handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+        unsafe {
+            let info = vk::MemoryGetFdInfoKHR::default()
+                .memory(buffer.memory)
+                .handle_type(handle);
+            let fd = fd_functions.get_memory_fd(&info).unwrap();
+            // Opaque fds must be imported with the memory type they were exported from.
+            let bits = vk_device
+                .get_buffer_memory_requirements(buffer.buffer)
+                .memory_type_bits;
+            let mut import = vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(handle)
+                .fd(fd);
+            let mut dedicated_info =
+                vk::MemoryDedicatedAllocateInfo::default().buffer(buffer.buffer);
+            let mut allocate = vk::MemoryAllocateInfo::default()
+                .allocation_size(buffer.allocation_size)
+                .memory_type_index(device.memory_type(bits, host, none).unwrap())
+                .push_next(&mut import);
+            if dedicated {
+                allocate = allocate.push_next(&mut dedicated_info);
+            }
+            let imported = vk_device.allocate_memory(&allocate, None).unwrap();
+            let map = vk::MemoryMapFlags::empty();
+            let a = vk_device.map_memory(buffer.memory, 0, 4, map).unwrap();
+            let b = vk_device.map_memory(imported, 0, 4, map).unwrap();
+            a.cast::<u32>().write_volatile(0xC0DA_F00D);
+            assert_eq!(b.cast::<u32>().read_volatile(), 0xC0DA_F00D);
+            vk_device.unmap_memory(imported);
+            vk_device.unmap_memory(buffer.memory);
+            vk_device.free_memory(imported, None);
+        }
+    }
 
     #[test]
     fn every_required_feature_is_checked() {

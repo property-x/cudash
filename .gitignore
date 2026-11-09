@@ -1,4 +1,18 @@
+# tools
 /target
+
+# IDE
+.idea/
+.vscode/
+
+# Notes
 /todo
 /plan
 /notes
+.obsidian/
+
+# AI
+agents/
+AGENTS.md
+.claude/
+CLAUDE.md
