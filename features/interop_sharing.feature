@@ -13,15 +13,15 @@ Feature: Sharing one buffer between CUDA and Vulkan
 
   @untested
   Scenario: CUDA and Vulkan take turns on one buffer
-    Given an interop buffer "a" of 2 u32 elements
-    And an interop buffer "b" of 2 u32 elements
-    And an interop buffer "c" of 2 u32 elements
-    When CUDA writes 41 and 42 into "a"
+    Given a cudash slice "a" of 2 u32 elements
+    And a cudash slice "b" of 2 u32 elements
+    And a cudash slice "c" of 2 u32 elements
+    When CUDA writes 41 and 42 into a lent "a"
     And Vulkan copies "a" to "b"
-    Then the interop buffer "b" reads 41 and 42
+    Then the slice "b" reads 41 and 42
     When CUDA writes 1 and 1 into "b"
     And Vulkan copies "b" to "c"
-    Then the interop buffer "c" reads 1 and 1
+    Then the slice "c" reads 1 and 1
 
   @untested
   Scenario: A Vulkan wait with no signal times out and returns false

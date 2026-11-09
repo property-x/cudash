@@ -79,7 +79,8 @@ unsafe { builder.launch(LaunchConfig::for_num_elems(n as u32)) } ?;
   `SV_DispatchThreadID` for indices.
 - **cudarc:** the same source compiles to PTX with the same signature, but that PTX hasn't run yet,
   since it needs an NVIDIA GPU. `examples/slang_spirv.rs` and `examples/slang_cudarc.rs` are the same
-  program on each.
+  program on each. `examples/slang_interop.rs` runs the PTX through cudarc on memory cudash owns, with
+  `Interop::lend_mut`.
 - **PTX files** end in a NUL byte if you compile by hand, which makes `Ptx::from_src` panic. `build.rs`
   strips it.
 
@@ -112,8 +113,7 @@ Vulkan objects, for example to render results. Ordering that work against stream
 
 The `cudarc` feature adds `cudash::interop`, for sharing memory with real CUDA on NVIDIA hardware.
 `Interop::new(&ctx, cuda_stream)` pairs a cudash context with a cudarc stream on the same GPU, and
-creates buffers and semaphores both can use. `cuda_context_for(&ctx)` finds that GPU in CUDA. It has
-never been run on NVIDIA, and `lend` (`plan/api.md`) will replace the separate buffer type.
+creates buffers and semaphores both can use. `cuda_context_for(&ctx)` finds that GPU in CUDA.
 
 ## Building and testing
 

@@ -5,7 +5,7 @@ mod common;
 
 use ash::vk;
 use common::{Nvidia, nvidia};
-use cudash::interop::{Error, SharedSemaphore};
+use cudash::interop::SharedSemaphore;
 
 const TIMEOUT_NS: u64 = 5_000_000_000;
 
@@ -83,63 +83,39 @@ fn submit(
     signal
 }
 
+/// Copies `size` bytes between two cudash slices' Vulkan buffers.
+fn copy_buffer(vk: &Vk, cb: vk::CommandBuffer, src: vk::Buffer, dst: vk::Buffer, size: u64) {
+    let region = vk::BufferCopy::default().size(size);
+    unsafe {
+        vk.gpu
+            .ctx
+            .vk_device()
+            .cmd_copy_buffer(cb, src, dst, &[region])
+    };
+}
+
 #[test]
 fn cuda_writes_vulkan_reads() {
     let Some(vk) = vulkan() else {
         return;
     };
-    let device = vk.gpu.ctx.vk_device();
-    let interop = &vk.gpu.interop;
-    let usage = vk::BufferUsageFlags::TRANSFER_SRC;
-    let mut shared = interop.create_buffer::<u32>(1024, usage).unwrap();
-    let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let staging = interop
-        .create_buffer_with::<u32>(1024, vk::BufferUsageFlags::TRANSFER_DST, host)
-        .unwrap();
+    let (interop, stream) = (&vk.gpu.interop, &vk.gpu.stream);
+    let mut shared = stream.alloc_zeros::<u32>(1024).unwrap();
+    let out = stream.alloc_zeros::<u32>(1024).unwrap();
     let semaphore = interop.create_semaphore().unwrap();
 
     let expected: Vec<u32> = (0..1024).collect();
-    interop
-        .stream()
-        .memcpy_htod(&expected, &mut shared)
-        .unwrap();
-    let ready = semaphore.cuda_signal(interop.stream()).unwrap();
+    let ready = {
+        let mut lent = interop.lend_mut(&mut shared).unwrap();
+        interop.stream().memcpy_htod(&expected, &mut lent).unwrap();
+        semaphore.cuda_signal(interop.stream()).unwrap()
+    };
 
-    submit(&vk, &semaphore, ready, |cb| unsafe {
-        device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[shared.vk_acquire_barrier(vk.queue_family)],
-            &[],
-        );
-        let region = vk::BufferCopy::default().size(4 * 1024);
-        device.cmd_copy_buffer(cb, shared.vk_buffer(), staging.vk_buffer(), &[region]);
-        let to_host = vk::MemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::HOST_READ);
-        device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::HOST,
-            vk::DependencyFlags::empty(),
-            &[to_host],
-            &[],
-            &[],
-        );
+    submit(&vk, &semaphore, ready, |cb| {
+        copy_buffer(&vk, cb, shared.vk_buffer(), out.vk_buffer(), 4 * 1024)
     });
 
-    unsafe {
-        let flags = vk::MemoryMapFlags::empty();
-        let mapped = device
-            .map_memory(staging.vk_memory(), 0, vk::WHOLE_SIZE, flags)
-            .unwrap();
-        let actual = std::slice::from_raw_parts(mapped.cast::<u32>(), 1024);
-        assert_eq!(actual, expected);
-        device.unmap_memory(staging.vk_memory());
-    }
+    assert_eq!(stream.clone_dtoh(&out).unwrap(), expected);
 }
 
 #[test]
@@ -148,57 +124,18 @@ fn vulkan_writes_cuda_reads() {
         return;
     };
     let device = vk.gpu.ctx.vk_device();
-    let interop = &vk.gpu.interop;
-    let shared = interop
-        .create_buffer::<u32>(1024, vk::BufferUsageFlags::TRANSFER_DST)
-        .unwrap();
+    let (interop, stream) = (&vk.gpu.interop, &vk.gpu.stream);
+    let shared = stream.alloc_zeros::<u32>(1024).unwrap();
     let semaphore = interop.create_semaphore().unwrap();
 
     let ready = submit(&vk, &semaphore, 0, |cb| unsafe {
-        device.cmd_fill_buffer(cb, shared.vk_buffer(), 0, vk::WHOLE_SIZE, 0xC0DA_F00D);
-        device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[shared.vk_release_barrier(vk.queue_family)],
-            &[],
-        );
+        device.cmd_fill_buffer(cb, shared.vk_buffer(), 0, 4 * 1024, 0xC0DA_F00D);
     });
 
     semaphore.cuda_wait(interop.stream(), ready).unwrap();
+    let lent = interop.lend(&shared).unwrap();
     assert_eq!(
-        interop.stream().clone_dtoh(&shared).unwrap(),
+        interop.stream().clone_dtoh(&lent).unwrap(),
         vec![0xC0DA_F00D_u32; 1024]
     );
-}
-
-#[test]
-fn new_buffers_are_zeroed() {
-    let Some(gpu) = nvidia() else {
-        return;
-    };
-    let interop = &gpu.interop;
-    let shared = interop
-        .create_buffer::<u64>(64, vk::BufferUsageFlags::TRANSFER_SRC)
-        .unwrap();
-    assert_eq!(interop.stream().clone_dtoh(&shared).unwrap(), vec![0; 64]);
-}
-
-#[test]
-fn invalid_lengths_are_rejected() {
-    let Some(gpu) = nvidia() else {
-        return;
-    };
-    let interop = &gpu.interop;
-    let usage = vk::BufferUsageFlags::TRANSFER_SRC;
-    assert!(matches!(
-        interop.create_buffer::<u32>(0, usage),
-        Err(Error::InvalidLength)
-    ));
-    assert!(matches!(
-        interop.create_buffer::<u32>(usize::MAX, usage),
-        Err(Error::InvalidLength)
-    ));
 }

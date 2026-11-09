@@ -3,13 +3,12 @@
 
 use std::{fmt::Display, sync::Arc};
 
-use ash::vk;
 use cudash::{
     driver,
     interop::{
-        Interop, SharedBuffer, cuda_context_for,
+        Interop, cuda_context_for,
         cudarc::{
-            driver::{CudaContext, CudaFunction, DeviceRepr, ValidAsZeroBits},
+            driver::{CudaContext, CudaFunction},
             nvrtc::compile_ptx,
         },
     },
@@ -38,9 +37,12 @@ pub fn skip(reason: impl Display) {
     eprintln!("SKIPPED: {reason}");
 }
 
-/// A cudash context, the CUDA context on the same GPU, and an `Interop` on its default stream.
+/// A cudash context and its default stream, the CUDA context on the same GPU, and an
+/// `Interop` on that context's default stream. cudash slices come from `stream`, and
+/// `interop` lends them to cudarc.
 pub struct Nvidia {
     pub ctx: Arc<driver::CudaContext>,
+    pub stream: Arc<driver::CudaStream>,
     pub cuda: Arc<CudaContext>,
     pub interop: Interop,
 }
@@ -51,30 +53,18 @@ pub fn nvidia() -> Option<Nvidia> {
     let cuda = cuda_context_for(&ctx).inspect_err(|e| skip(e)).ok()?;
     let interop = Interop::new(&ctx, cuda.default_stream())
         .expect("Interop::new failed on an NVIDIA machine");
-    Some(Nvidia { ctx, cuda, interop })
+    let stream = ctx.default_stream();
+    Some(Nvidia {
+        ctx,
+        stream,
+        cuda,
+        interop,
+    })
 }
 
 /// `false` (after [`skip`]) when there's no NVIDIA GPU with CUDA.
 pub fn have_nvidia() -> bool {
     nvidia().is_some()
-}
-
-/// A zeroed shared buffer that Vulkan can copy from.
-pub fn buf<T: DeviceRepr + ValidAsZeroBits>(
-    interop: &Interop,
-    len: usize,
-) -> cudash::interop::Result<SharedBuffer<T>> {
-    interop.create_buffer(len, vk::BufferUsageFlags::TRANSFER_SRC)
-}
-
-/// A shared buffer holding a copy of `data`.
-pub fn buf_from<T: DeviceRepr + ValidAsZeroBits>(
-    interop: &Interop,
-    data: &[T],
-) -> cudash::interop::Result<SharedBuffer<T>> {
-    let mut b = buf(interop, data.len())?;
-    interop.stream().memcpy_htod(data, &mut b)?;
-    Ok(b)
 }
 
 /// cudarc's `examples/sin.cu`.

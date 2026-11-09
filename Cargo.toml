@@ -57,6 +57,10 @@ name = "slang_spirv"
 name = "slang_cudarc"
 required-features = ["cudarc"]
 
+[[example]]
+name = "slang_interop"
+required-features = ["cudarc"]
+
 [[test]]
 name = "features"
 harness = false
