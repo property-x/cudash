@@ -30,3 +30,14 @@ fn when_cuda_context_for(w: &mut World) {
     let outcome = interop::cuda_context_for(w.ctx()).map(|_| ());
     let _ = w.record(outcome);
 }
+
+#[when(regex = r"^I lend a new slice of 4 u32 elements with (as_cuda|as_cuda_mut)$")]
+fn when_as_cuda(w: &mut World, method: String) {
+    use interop::AsCuda;
+    let mut slice = w.default_stream().alloc_zeros::<u32>(4).expect("alloc");
+    let outcome = match method.as_str() {
+        "as_cuda" => slice.as_cuda().map(|_| ()),
+        _ => slice.as_cuda_mut().map(|_| ()),
+    };
+    let _ = w.record(outcome);
+}

@@ -6,7 +6,7 @@ use std::{fmt::Display, sync::Arc};
 use cudash::{
     driver,
     interop::{
-        Interop, cuda_context_for,
+        cuda_context_for,
         cudarc::{
             driver::{CudaContext, CudaFunction},
             nvrtc::compile_ptx,
@@ -37,29 +37,20 @@ pub fn skip(reason: impl Display) {
     eprintln!("SKIPPED: {reason}");
 }
 
-/// A cudash context and its default stream, the CUDA context on the same GPU, and an
-/// `Interop` on that context's default stream. cudash slices come from `stream`, and
-/// `interop` lends them to cudarc.
+/// A cudash context and its default stream, and the CUDA context on the same GPU. cudash
+/// slices come from `stream`, and `as_cuda` lends them to cudarc.
 pub struct Nvidia {
     pub ctx: Arc<driver::CudaContext>,
     pub stream: Arc<driver::CudaStream>,
     pub cuda: Arc<CudaContext>,
-    pub interop: Interop,
 }
 
 /// The NVIDIA GPU's contexts, or `None` after [`skip`]. Doesn't touch CUDA on other GPUs.
 pub fn nvidia() -> Option<Nvidia> {
     let ctx = driver::CudaContext::new(0).inspect_err(|e| skip(e)).ok()?;
     let cuda = cuda_context_for(&ctx).inspect_err(|e| skip(e)).ok()?;
-    let interop = Interop::new(&ctx, cuda.default_stream())
-        .expect("Interop::new failed on an NVIDIA machine");
     let stream = ctx.default_stream();
-    Some(Nvidia {
-        ctx,
-        stream,
-        cuda,
-        interop,
-    })
+    Some(Nvidia { ctx, stream, cuda })
 }
 
 /// `false` (after [`skip`]) when there's no NVIDIA GPU with CUDA.

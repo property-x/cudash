@@ -8,7 +8,10 @@ use std::fmt::Debug;
 
 use cudash::{
     driver,
-    interop::cudarc::driver::{DeviceRepr, ValidAsZeroBits},
+    interop::{
+        AsCuda,
+        cudarc::driver::{DeviceRepr, ValidAsZeroBits},
+    },
 };
 
 use common::*;
@@ -20,17 +23,17 @@ where
     T: DeviceRepr + ValidAsZeroBits + driver::DeviceRepr + driver::ValidAsZeroBits,
     T: PartialEq + Debug + Clone,
 {
-    let (interop, stream) = (&gpu.interop, &gpu.stream);
+    let stream = &gpu.stream;
 
     let written = stream.clone_htod(data)?;
-    let lent = interop.lend(&written)?;
-    assert_eq!(interop.stream().clone_dtoh(&lent)?, data);
+    let lent = written.as_cuda()?;
+    assert_eq!(lent.stream().clone_dtoh(&lent)?, data);
     drop(lent);
 
     let mut target = stream.alloc_zeros::<T>(data.len())?;
     {
-        let mut lent = interop.lend_mut(&mut target)?;
-        interop.stream().memcpy_htod(data, &mut lent)?;
+        let mut lent = target.as_cuda_mut()?;
+        lent.stream().clone().memcpy_htod(data, &mut lent)?;
     }
     assert_eq!(stream.clone_dtoh(&target)?, data);
     Ok(())
@@ -59,15 +62,14 @@ fn host_to_device_into_a_view_leaves_neighbours_alone() -> cudash::interop::Resu
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (interop, stream) = (&gpu.interop, &gpu.stream);
+    let stream = &gpu.stream;
 
     let mut buf = stream.alloc_zeros::<u32>(8)?;
     {
-        let mut lent = interop.lend_mut(&mut buf)?;
+        let mut lent = buf.as_cuda_mut()?;
+        let cuda = lent.stream().clone();
         let mut whole = lent.as_view_mut();
-        interop
-            .stream()
-            .memcpy_htod(&[1u32, 2, 3], &mut whole.slice_mut(2..5))?;
+        cuda.memcpy_htod(&[1u32, 2, 3], &mut whole.slice_mut(2..5))?;
     }
     assert_eq!(stream.clone_dtoh(&buf)?, [0, 0, 1, 2, 3, 0, 0, 0]);
     Ok(())
@@ -78,12 +80,12 @@ fn device_to_host_into_an_existing_slice() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (interop, stream) = (&gpu.interop, &gpu.stream);
+    let stream = &gpu.stream;
 
     let buf = stream.clone_htod(&[4u8, 5, 6])?;
-    let lent = interop.lend(&buf)?;
+    let lent = buf.as_cuda()?;
     let mut host = vec![0u8; 3];
-    interop.stream().memcpy_dtoh(&lent, &mut host)?;
+    lent.stream().memcpy_dtoh(&lent, &mut host)?;
     assert_eq!(host, [4, 5, 6]);
     Ok(())
 }
@@ -94,17 +96,16 @@ fn device_to_device_between_views() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {
         return Ok(());
     };
-    let (interop, stream) = (&gpu.interop, &gpu.stream);
+    let stream = &gpu.stream;
 
     let src = stream.clone_htod(&[10u32, 11, 12, 13])?;
     let mut dst = stream.alloc_zeros::<u32>(6)?;
     {
-        let src = interop.lend(&src)?;
-        let mut dst = interop.lend_mut(&mut dst)?;
+        let src = src.as_cuda()?;
+        let mut dst = dst.as_cuda_mut()?;
+        let cuda = dst.stream().clone();
         let mut whole = dst.as_view_mut();
-        interop
-            .stream()
-            .memcpy_dtod(&src.slice(1..3), &mut whole.slice_mut(3..5))?;
+        cuda.memcpy_dtod(&src.slice(1..3), &mut whole.slice_mut(3..5))?;
     }
     assert_eq!(stream.clone_dtoh(&dst)?, [0, 0, 0, 11, 12, 0]);
     Ok(())

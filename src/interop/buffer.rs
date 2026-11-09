@@ -16,16 +16,16 @@ use cudarc::driver::{
 use crate::interop::Result;
 
 /// A cudash slice lent to cudarc for reading, from
-/// [`Interop::lend`](crate::interop::Interop::lend). It goes wherever cudarc takes a
-/// `&CudaSlice`. Dropping it waits for the interop stream.
+/// [`AsCuda::as_cuda`](crate::interop::AsCuda::as_cuda). It goes wherever cudarc takes a
+/// `&CudaSlice`. Dropping it waits for the CUDA stream it's bound to.
 pub struct Lent<'l, T> {
     pub(crate) cuda: Imported<T>,
     pub(crate) _slice: PhantomData<&'l crate::driver::CudaSlice<T>>,
 }
 
 /// A cudash slice lent to cudarc for writing, from
-/// [`Interop::lend_mut`](crate::interop::Interop::lend_mut). It goes wherever cudarc takes
-/// a `&mut CudaSlice` too. Dropping it waits for the interop stream.
+/// [`AsCuda::as_cuda_mut`](crate::interop::AsCuda::as_cuda_mut). It goes wherever cudarc
+/// takes a `&mut CudaSlice` too. Dropping it waits for the CUDA stream it's bound to.
 pub struct LentMut<'l, T> {
     pub(crate) cuda: Imported<T>,
     pub(crate) _slice: PhantomData<&'l mut crate::driver::CudaSlice<T>>,

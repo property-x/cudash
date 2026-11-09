@@ -29,6 +29,9 @@ pub(crate) struct Device {
     host_import: Option<HostImport>,
     /// The optional extensions that were enabled.
     pub(crate) extensions: Vec<&'static CStr>,
+    /// The matching CUDA context, created by `interop` on first use.
+    #[cfg(feature = "cudarc")]
+    pub(crate) cuda: crate::interop::ContextSlot,
 }
 
 /// `VK_EXT_external_memory_host`, where the driver has it.
@@ -163,6 +166,8 @@ impl Device {
                 ordinal,
                 host_import,
                 extensions,
+                #[cfg(feature = "cudarc")]
+                cuda: Default::default(),
             }))
         }
     }
@@ -580,9 +585,14 @@ mod tests {
                 .handle_type(handle);
             let fd = fd_functions.get_memory_fd(&info).unwrap();
             // Opaque fds must be imported with the memory type they were exported from.
-            let bits = vk_device.get_buffer_memory_requirements(buffer.buffer).memory_type_bits;
-            let mut import = vk::ImportMemoryFdInfoKHR::default().handle_type(handle).fd(fd);
-            let mut dedicated_info = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer.buffer);
+            let bits = vk_device
+                .get_buffer_memory_requirements(buffer.buffer)
+                .memory_type_bits;
+            let mut import = vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(handle)
+                .fd(fd);
+            let mut dedicated_info =
+                vk::MemoryDedicatedAllocateInfo::default().buffer(buffer.buffer);
             let mut allocate = vk::MemoryAllocateInfo::default()
                 .allocation_size(buffer.allocation_size)
                 .memory_type_index(device.memory_type(bits, host, none).unwrap())

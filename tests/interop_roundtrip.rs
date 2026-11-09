@@ -1,11 +1,11 @@
-//! The low-level `Interop` API, with hand-written Vulkan submissions. These tests need an NVIDIA GPU
+//! `SharedSemaphore` and `AsCuda`, with hand-written Vulkan submissions. These tests need an NVIDIA GPU
 //! with CUDA, and print SKIPPED (or panic, with CUDASH_REQUIRE_NVIDIA set) on any other machine.
 
 mod common;
 
 use ash::vk;
 use common::{Nvidia, nvidia};
-use cudash::interop::SharedSemaphore;
+use cudash::interop::{AsCuda, SharedSemaphore};
 
 const TIMEOUT_NS: u64 = 5_000_000_000;
 
@@ -99,16 +99,17 @@ fn cuda_writes_vulkan_reads() {
     let Some(vk) = vulkan() else {
         return;
     };
-    let (interop, stream) = (&vk.gpu.interop, &vk.gpu.stream);
+    let stream = &vk.gpu.stream;
     let mut shared = stream.alloc_zeros::<u32>(1024).unwrap();
     let out = stream.alloc_zeros::<u32>(1024).unwrap();
-    let semaphore = interop.create_semaphore().unwrap();
+    let semaphore = SharedSemaphore::new(&vk.gpu.ctx).unwrap();
 
     let expected: Vec<u32> = (0..1024).collect();
     let ready = {
-        let mut lent = interop.lend_mut(&mut shared).unwrap();
-        interop.stream().memcpy_htod(&expected, &mut lent).unwrap();
-        semaphore.cuda_signal(interop.stream()).unwrap()
+        let mut lent = shared.as_cuda_mut().unwrap();
+        let cuda = lent.stream().clone();
+        cuda.memcpy_htod(&expected, &mut lent).unwrap();
+        semaphore.cuda_signal(&cuda).unwrap()
     };
 
     submit(&vk, &semaphore, ready, |cb| {
@@ -124,18 +125,18 @@ fn vulkan_writes_cuda_reads() {
         return;
     };
     let device = vk.gpu.ctx.vk_device();
-    let (interop, stream) = (&vk.gpu.interop, &vk.gpu.stream);
+    let stream = &vk.gpu.stream;
     let shared = stream.alloc_zeros::<u32>(1024).unwrap();
-    let semaphore = interop.create_semaphore().unwrap();
+    let semaphore = SharedSemaphore::new(&vk.gpu.ctx).unwrap();
 
     let ready = submit(&vk, &semaphore, 0, |cb| unsafe {
         device.cmd_fill_buffer(cb, shared.vk_buffer(), 0, 4 * 1024, 0xC0DA_F00D);
     });
 
-    semaphore.cuda_wait(interop.stream(), ready).unwrap();
-    let lent = interop.lend(&shared).unwrap();
+    let lent = shared.as_cuda().unwrap();
+    semaphore.cuda_wait(lent.stream(), ready).unwrap();
     assert_eq!(
-        interop.stream().clone_dtoh(&lent).unwrap(),
+        lent.stream().clone_dtoh(&lent).unwrap(),
         vec![0xC0DA_F00D_u32; 1024]
     );
 }
