@@ -109,6 +109,21 @@ The goal is to have parity wherever it makes sense.
 `ctx.vk_instance()`, `ctx.vk_physical_device()`, `ctx.vk_device()` and `slice.vk_buffer()` give you the
 Vulkan objects, for example to render results. Ordering that work against streams is up to you.
 
+To use a result in your own shaders as an image, `slice.to_image(width, height)` copies it into a
+`CudaImage<T>`, with the format taken from `T` (`f32` is `R32_SFLOAT`, `[u8; 4]` is `R8G8B8A8_UNORM`).
+`stream.clone_to_image` does the same on a stream of your choice, and `stream.imgcpy_dtod` refreshes an image.
+`slice.as_image(width, height)` copies nothing: the image is a linear view of the slice's memory, so later writes
+to the slice show in it. It fails with `InvalidImage` where the GPU can't do that, such as for tiny slices or
+unaligned views, and then `to_image` still works. `vk_image()` and `vk_image_view()` give the handles, and the
+layout is `GENERAL`. cudarc has no images, so this is cudash-only, and kernels can't take images as arguments.
+
+To inspect GPU work in RenderDoc, see `examples/frame_capture.rs`. It processes a 2560x2160 frame, and marks
+it as one frame through RenderDoc's in-application API, since a compute-only program never presents. Every
+operation is labeled in the Event Browser (`memcpy_htod 22.1 MB`, `launch computeMain grid ... block ...`)
+through `VK_EXT_debug_utils`, where the instance has it. The `kernel_debug` feature, on by default, compiles
+kernels with `-g`, so RenderDoc shows the Slang source and can step through a thread. That also embeds the
+kernel source in the SPIR-V, so anyone with your binary can read it. Turn it off for builds you ship.
+
 ## Using it with cudarc
 
 The `cudarc` feature adds `cudash::interop`, for sharing memory with real CUDA on NVIDIA hardware.
