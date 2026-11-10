@@ -29,6 +29,8 @@ pub(crate) struct Device {
     host_import: Option<HostImport>,
     /// The optional extensions that were enabled.
     pub(crate) extensions: Vec<&'static CStr>,
+    /// Labels operations for tools such as RenderDoc, where the instance has the extension.
+    pub(crate) debug_utils: Option<ext::debug_utils::Device>,
     /// The matching CUDA context, created by `interop` on first use.
     #[cfg(feature = "cudarc")]
     pub(crate) cuda: crate::interop::ContextSlot,
@@ -46,60 +48,69 @@ struct HostImport {
 struct Vulkan {
     _entry: ash::Entry,
     instance: ash::Instance,
+    /// Whether `VK_EXT_debug_utils` is on, for labels in tools such as RenderDoc.
+    debug_utils: bool,
 }
 
 /// The shared instance, created on first use. A failure isn't cached, so later calls retry.
-fn instance() -> Result<&'static ash::Instance, DriverError> {
+fn vulkan() -> Result<&'static Vulkan, DriverError> {
     static VULKAN: Mutex<Option<&'static Vulkan>> = Mutex::new(None);
     let mut slot = VULKAN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(vulkan) = *slot {
-        return Ok(&vulkan.instance);
+        return Ok(vulkan);
     }
     let vulkan: &'static Vulkan = Box::leak(Box::new(create_instance()?));
     *slot = Some(vulkan);
-    Ok(&vulkan.instance)
+    Ok(vulkan)
 }
 
 fn create_instance() -> Result<Vulkan, DriverError> {
     unsafe {
         let entry = ash::Entry::load().map_err(|e| DriverError::NoVulkan(e.to_string()))?;
         let app = vk::ApplicationInfo::default().api_version(API_VERSION);
-        let extension = entry.enumerate_instance_extension_properties(None)?;
-        let portability = [khr::portability_enumeration::NAME.as_ptr()];
-        let mut info = vk::InstanceCreateInfo::default().application_info(&app);
-        if extension
-            .iter()
-            .any(|ext| ext.extension_name_as_c_str() == Ok(khr::portability_enumeration::NAME))
-        {
-            info = info
-                .enabled_extension_names(&portability)
-                .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+        let available = entry.enumerate_instance_extension_properties(None)?;
+        let has = |name| {
+            available
+                .iter()
+                .any(|e| e.extension_name_as_c_str() == Ok(name))
+        };
+        let debug_utils = has(ext::debug_utils::NAME);
+        let mut extensions = Vec::new();
+        if debug_utils {
+            extensions.push(ext::debug_utils::NAME.as_ptr());
         }
-        let instance = entry.create_instance(&info, None)?;
+        let mut info = vk::InstanceCreateInfo::default().application_info(&app);
+        if has(khr::portability_enumeration::NAME) {
+            extensions.push(khr::portability_enumeration::NAME.as_ptr());
+            info = info.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+        }
+        let instance = entry.create_instance(&info.enabled_extension_names(&extensions), None)?;
         Ok(Vulkan {
             _entry: entry,
             instance,
+            debug_utils,
         })
     }
 }
 
 /// Lists suitable GPUs, discrete ones first, so ordinal 0 is the one a CUDA user would expect.
 /// If portability extension is enabled, we list these devices as well, e.g. MoltenVK.
-fn enumerate() -> Result<(&'static ash::Instance, Vec<vk::PhysicalDevice>), DriverError> {
-    let instance = instance()?;
+fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError> {
+    let vulkan = vulkan()?;
+    let instance = &vulkan.instance;
     unsafe {
         let mut devices = instance.enumerate_physical_devices()?;
         devices.retain(|&pd| {
             let properties = instance.get_physical_device_properties(pd);
             properties.api_version >= API_VERSION
                 && properties.device_type != vk::PhysicalDeviceType::CPU
-                && compute_queue_family(&instance, pd).is_some()
+                && compute_queue_family(instance, pd).is_some()
         });
         devices.sort_by_key(|&pd| {
             let kind = instance.get_physical_device_properties(pd).device_type;
             kind != vk::PhysicalDeviceType::DISCRETE_GPU
         });
-        Ok((instance, devices))
+        Ok((vulkan, devices))
     }
 }
 
@@ -135,18 +146,49 @@ fn missing_required_feature(
         ("timelineSemaphore", v12.timeline_semaphore),
         ("synchronization2", v13.synchronization2),
     ]
-        .into_iter()
-        .find_map(|(name, enabled)| (enabled != vk::TRUE).then_some(name))
+    .into_iter()
+    .find_map(|(name, enabled)| (enabled != vk::TRUE).then_some(name))
 }
 
 impl Device {
+    /// Names `handle` for tools such as RenderDoc, prefixed with its Vulkan type, as in
+    /// `[Pipeline] computeMain block (16, 16, 1)`. `name` is only formatted when
+    /// `VK_EXT_debug_utils` is on, and failing to set it changes nothing else.
+    pub(crate) fn set_name<H: vk::Handle>(&self, handle: H, name: std::fmt::Arguments<'_>) {
+        if let Some(utils) = &self.debug_utils {
+            let kind = match H::TYPE {
+                vk::ObjectType::DEVICE => "Device".to_owned(),
+                vk::ObjectType::QUEUE => "Queue".to_owned(),
+                vk::ObjectType::SEMAPHORE => "Semaphore".to_owned(),
+                vk::ObjectType::COMMAND_POOL => "Command Pool".to_owned(),
+                vk::ObjectType::COMMAND_BUFFER => "Command Buffer".to_owned(),
+                vk::ObjectType::BUFFER => "Buffer".to_owned(),
+                vk::ObjectType::DEVICE_MEMORY => "Memory".to_owned(),
+                vk::ObjectType::IMAGE => "Image".to_owned(),
+                vk::ObjectType::IMAGE_VIEW => "Image View".to_owned(),
+                vk::ObjectType::SHADER_MODULE => "Shader Module".to_owned(),
+                vk::ObjectType::PIPELINE_LAYOUT => "Pipeline Layout".to_owned(),
+                vk::ObjectType::PIPELINE => "Pipeline".to_owned(),
+                other => format!("{other:?}"),
+            };
+            let name = std::ffi::CString::new(format!("[{kind}] {name}")).unwrap_or_default();
+            let info = vk::DebugUtilsObjectNameInfoEXT::default()
+                .object_handle(handle)
+                .object_name(&name);
+            let _ = unsafe { utils.set_debug_utils_object_name(&info) };
+        }
+    }
+
     pub(crate) fn count() -> Result<i32, DriverError> {
         Ok(enumerate()?.1.len() as i32)
     }
 
     pub(crate) fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
-        let (instance, devices) = enumerate()?;
-        let pd = *devices.get(ordinal).ok_or(DriverError::NoSuchDevice(ordinal))?;
+        let (vulkan, devices) = enumerate()?;
+        let instance = &vulkan.instance;
+        let pd = *devices
+            .get(ordinal)
+            .ok_or(DriverError::NoSuchDevice(ordinal))?;
         let extensions = available_extensions(instance, pd);
         let (device, queue_family, physical_device) =
             unsafe { Self::create(instance, pd, &extensions) }?;
@@ -160,11 +202,14 @@ impl Device {
             }
             instance.get_physical_device_properties2(physical_device, &mut properties);
             let properties = properties.properties;
+            let debug_utils = vulkan
+                .debug_utils
+                .then(|| ext::debug_utils::Device::new(instance, &device));
             let host_import = has_host_import.then(|| HostImport {
                 functions: ext::external_memory_host::Device::new(instance, &device),
                 alignment: import.min_imported_host_pointer_alignment,
             });
-            Ok(Arc::new(Self {
+            let device = Arc::new(Self {
                 queue: Mutex::new(device.get_device_queue(queue_family, 0)),
                 memory: instance.get_physical_device_memory_properties(physical_device),
                 uuid: id.device_uuid,
@@ -176,9 +221,19 @@ impl Device {
                 ordinal,
                 host_import,
                 extensions,
+                debug_utils,
                 #[cfg(feature = "cudarc")]
                 cuda: Default::default(),
-            }))
+            });
+            device.set_name(
+                device.device.handle(),
+                format_args!("CudaContext {ordinal}"),
+            );
+            device.set_name(
+                *device.queue.lock().unwrap(),
+                format_args!("CudaContext {ordinal}"),
+            );
+            Ok(device)
         }
     }
 
@@ -262,8 +317,8 @@ impl Device {
             (0..count).find(|&i| {
                 bits & (1 << i) != 0
                     && self.memory.memory_types[i as usize]
-                    .property_flags
-                    .contains(flags)
+                        .property_flags
+                        .contains(flags)
             })
         };
         find(wanted | preferred)
@@ -335,6 +390,15 @@ unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
 impl Buffer {
+    /// Names the buffer and its memory, as [`Device::set_name`].
+    pub(crate) fn set_name(&self, name: std::fmt::Arguments<'_>) {
+        if self.device.debug_utils.is_some() && self.buffer != vk::Buffer::null() {
+            let name = name.to_string();
+            self.device.set_name(self.buffer, format_args!("{name}"));
+            self.device.set_name(self.memory, format_args!("{name}"));
+        }
+    }
+
     fn empty(device: &Arc<Device>) -> Self {
         Self {
             device: device.clone(),
@@ -484,7 +548,7 @@ impl Buffer {
                 start as *const _,
                 &mut pointer,
             )
-                .result()?;
+            .result()?;
             let mut external =
                 vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle_type);
             let info = vk::BufferCreateInfo::default()

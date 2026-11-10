@@ -14,6 +14,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SLANGC");
     println!("cargo:rerun-if-env-changed=NVRTC_PATH");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_KERNEL_DEBUG");
     let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     let slangc = std::env::var("SLANGC").unwrap_or_else(|_| "slangc".into());
 
@@ -39,11 +40,18 @@ fn compile(slangc: &str, src: &Path, out_dir: &Path) {
     let ptx = out_dir.join(stem).with_extension("ptx");
 
     // Without -fvk-use-entrypoint-name, Slang renames every SPIR-V entry point to "main".
-    let spirv = Command::new(slangc)
+    // With the `kernel_debug` feature, -g (debug level 2) gives RenderDoc the Slang source and per-line info.
+    // It embeds the kernel source in the .spv, so anyone who has the binary or the SPIR-V can read the Slang source.
+    // Keep that in mind before shipping kernels built with the feature on.
+    // PTX stays without -g: it adds .loc/.file lines, and we can't load PTX on NVIDIA here to check.
+    let mut spirv_command = Command::new(slangc);
+    spirv_command
         .arg(src)
-        .args(["-target", "spirv", "-fvk-use-entrypoint-name", "-o"])
-        .arg(&spv)
-        .output();
+        .args(["-target", "spirv", "-fvk-use-entrypoint-name"]);
+    if std::env::var_os("CARGO_FEATURE_KERNEL_DEBUG").is_some() {
+        spirv_command.arg("-g");
+    }
+    let spirv = spirv_command.arg("-o").arg(&spv).output();
     let spirv = match spirv {
         Ok(output) => output,
         Err(e) => {

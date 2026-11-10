@@ -3,7 +3,12 @@
 use std::{
     any::Any,
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    ffi::CString,
+    fmt,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use ash::vk;
@@ -93,6 +98,8 @@ pub(crate) struct StreamCore {
     /// Staging buffers `memcpy_htod` reuses, and their sizes. One is free once this holds
     /// the only reference, because finished submissions drop theirs.
     staging: Mutex<Vec<(Arc<Buffer>, u64)>>,
+    /// What tools such as RenderDoc call this stream, such as `new_stream 3`.
+    name: String,
     /// The CUDA stream paired with this one, created by `interop` on first use.
     #[cfg(feature = "cudarc")]
     pub(crate) cuda: crate::interop::StreamSlot,
@@ -103,10 +110,14 @@ pub(crate) struct StreamCore {
 const STAGING_KEPT: usize = 4;
 
 impl StreamCore {
+    /// `kind` is how the stream was made, such as `default_stream`, and names it in tools.
     pub(crate) fn new(
         device: &Arc<Device>,
         after: Option<Point>,
+        kind: &str,
     ) -> Result<Arc<Self>, DriverError> {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        let name = format!("{kind} {}", COUNT.fetch_add(1, Ordering::Relaxed));
         let vk_device = &device.device;
         unsafe {
             let mut kind =
@@ -120,7 +131,10 @@ impl StreamCore {
                 .queue_family_index(device.queue_family)
                 .flags(vk::CommandPoolCreateFlags::TRANSIENT);
             let pool = vk_device.create_command_pool(&info, None)?;
+            device.set_name(timeline.semaphore, format_args!("{name}"));
+            device.set_name(pool, format_args!("{name}"));
             Ok(Arc::new(Self {
+                name,
                 device: device.clone(),
                 timeline,
                 pool,
@@ -169,7 +183,11 @@ impl StreamCore {
             .map(|(index, _)| index);
         match best {
             Some(index) => Ok(free.remove(index)),
-            None => Ok((Buffer::staging(&self.device, bytes)?, bytes)),
+            None => {
+                let buffer = Buffer::staging(&self.device, bytes)?;
+                buffer.set_name(format_args!("{} staging {}", self.name, Bytes(bytes)));
+                Ok((buffer, bytes))
+            }
         }
     }
 
@@ -190,24 +208,32 @@ impl StreamCore {
         } else {
             (vec![buffer], vec![])
         };
-        if self.submit(&reads, &writes, Vec::new(), |_, _| {}).is_err() {
+        let label = format_args!("device_ptr{}", if write { "_mut" } else { "" });
+        if self
+            .submit(label, &reads, &writes, Vec::new(), |_, _| {})
+            .is_err()
+        {
             let _ = wait_for_gpu(buffer).and_then(|()| self.synchronize());
         }
     }
 
+    /// `label` names the operation in tools such as RenderDoc. It's only formatted when
+    /// `VK_EXT_debug_utils` is on.
     pub(crate) fn submit(
         &self,
+        label: fmt::Arguments<'_>,
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
         keep: Vec<Keep>,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), DriverError> {
-        self.submit_at(reads, writes, keep, record).map(drop)
+        self.submit_at(label, reads, writes, keep, record).map(drop)
     }
 
     /// [`Self::submit`], returning the point the submission signals.
     fn submit_at(
         &self,
+        label: fmt::Arguments<'_>,
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
         mut keep: Vec<Keep>,
@@ -249,7 +275,21 @@ impl StreamCore {
             device
                 .begin_command_buffer(command_buffer, &begin)
                 .and_then(|()| {
+                    let utils = self.device.debug_utils.as_ref();
+                    if let Some(utils) = utils {
+                        // A NULL inside the label would only come from a kernel name.
+                        let name = CString::new(label.to_string()).unwrap_or_default();
+                        let info = vk::DebugUtilsLabelEXT::default().label_name(&name);
+                        utils.cmd_begin_debug_utils_label(command_buffer, &info);
+                        let stream = &self.name;
+                        let label = name.to_string_lossy();
+                        self.device
+                            .set_name(command_buffer, format_args!("{stream}: {label}"));
+                    }
                     record(device, command_buffer);
+                    if let Some(utils) = utils {
+                        utils.cmd_end_debug_utils_label(command_buffer);
+                    }
                     device.end_command_buffer(command_buffer)?;
                     let command_buffers =
                         [vk::CommandBufferSubmitInfo::default().command_buffer(command_buffer)];
@@ -327,6 +367,19 @@ impl std::fmt::Debug for SyncOnDrop<'_> {
         f.debug_struct("SyncOnDrop")
             .field("write", &self.write)
             .finish_non_exhaustive()
+    }
+}
+
+/// A byte count for labels, such as `22.1 MB`.
+struct Bytes(u64);
+
+impl fmt::Display for Bytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            b if b >= 1_000_000 => write!(f, "{:.1} MB", b as f64 / 1e6),
+            b if b >= 1_000 => write!(f, "{:.1} kB", b as f64 / 1e3),
+            b => write!(f, "{b} B"),
+        }
     }
 }
 
@@ -420,7 +473,7 @@ impl CudaStream {
 
     /// A new stream whose work starts after work already queued on this one.
     pub fn fork(&self) -> Result<Arc<Self>, DriverError> {
-        let core = StreamCore::new(&self.core.device, self.core.last_point())?;
+        let core = StreamCore::new(&self.core.device, self.core.last_point(), "fork")?;
         Ok(Self::new(&self.ctx, core))
     }
 
@@ -436,6 +489,10 @@ impl CudaStream {
             .checked_mul(size_of::<T>())
             .ok_or(DriverError::Vulkan(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY))?;
         let buffer = Buffer::device_local(self.device(), bytes as u64)?;
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNT.fetch_add(1, Ordering::Relaxed);
+        let ty = std::any::type_name::<T>();
+        buffer.set_name(format_args!("CudaSlice<{ty}> {id} len {len}"));
         Ok(CudaSlice::from_buffer(buffer, len, self.clone()))
     }
 
@@ -470,6 +527,7 @@ impl CudaStream {
         if range.offset.is_multiple_of(4) && bytes.is_multiple_of(4) {
             let (buffer, offset) = (range.buffer.buffer, range.offset);
             return self.core.submit(
+                format_args!("memset_zeros {}", Bytes(bytes)),
                 &[],
                 &[range.buffer],
                 Vec::new(),
@@ -478,13 +536,16 @@ impl CudaStream {
                 },
             );
         }
-        self.copy_staged(&vec![0; bytes as usize], range)
+        self.copy_staged("memset_zeros", &vec![0; bytes as usize], range)
     }
 
-    /// Queues a copy of `bytes` bytes between two buffers. `reads` and `writes` are
-    /// tracked and kept alive as for [`StreamCore::submit`], and `keep` is kept alive too.
+    /// Queues a copy of `bytes` bytes between two buffers, labeled with `op` and the size.
+    /// `reads` and `writes` are tracked and kept alive as for [`StreamCore::submit`], and
+    /// `keep` is kept alive too.
+    #[allow(clippy::too_many_arguments)]
     fn copy(
         &self,
+        op: &str,
         from: RawRange<'_>,
         to: RawRange<'_>,
         bytes: u64,
@@ -497,15 +558,21 @@ impl CudaStream {
             .dst_offset(to.offset)
             .size(bytes);
         let (from, to) = (from.buffer.buffer, to.buffer.buffer);
-        self.core
-            .submit_at(reads, writes, keep, |device, commands| unsafe {
+        self.core.submit_at(
+            format_args!("{op} {}", Bytes(bytes)),
+            reads,
+            writes,
+            keep,
+            |device, commands| unsafe {
                 device.cmd_copy_buffer(commands, from, to, &[region]);
-            })
+            },
+        )
     }
 
     /// Copies `source[source_offset..]` into `to`, keeping `source` alive until it's done.
     fn copy_to_device(
         &self,
+        op: &str,
         source: Arc<Buffer>,
         source_offset: u64,
         to: RawRange<'_>,
@@ -515,17 +582,17 @@ impl CudaStream {
             buffer: &source,
             offset: source_offset,
         };
-        self.copy(from, to, bytes, &[], &[to.buffer], vec![source.clone()])
+        self.copy(op, from, to, bytes, &[], &[to.buffer], vec![source.clone()])
             .map(drop)
     }
 
     /// Copies `data` into `to` through one of the stream's reused staging buffers.
-    fn copy_staged(&self, data: &[u8], to: RawRange<'_>) -> Result<(), DriverError> {
+    fn copy_staged(&self, op: &str, data: &[u8], to: RawRange<'_>) -> Result<(), DriverError> {
         let (staging, size) = self.core.take_staging(data.len() as u64)?;
         // SAFETY: nothing else holds `staging`, so the GPU isn't using it.
         unsafe { staging.write_bytes(data) };
         self.core.return_staging(staging.clone(), size);
-        self.copy_to_device(staging, 0, to, data.len() as u64)
+        self.copy_to_device(op, staging, 0, to, data.len() as u64)
     }
 
     /// Copies host data into a slice or view, in stream order, without waiting for the GPU.
@@ -551,7 +618,15 @@ impl CudaStream {
         if let Some(pinned) = src.pinned() {
             let (reads, writes) = (&[pinned.buffer], &[range.buffer]);
             return self
-                .copy(pinned, range, bytes, reads, writes, Vec::new())
+                .copy(
+                    "memcpy_htod pinned",
+                    pinned,
+                    range,
+                    bytes,
+                    reads,
+                    writes,
+                    Vec::new(),
+                )
                 .map(drop);
         }
         let src = src.as_host_slice();
@@ -569,14 +644,22 @@ impl CudaStream {
                 };
                 // Not passed as a read, which would keep the import alive past
                 // `host_unregister`. The read is recorded below instead, for it to wait on.
-                let point = self.copy(from, range, bytes, &[], &[range.buffer], Vec::new())?;
+                let point = self.copy(
+                    "memcpy_htod registered",
+                    from,
+                    range,
+                    bytes,
+                    &[],
+                    &[range.buffer],
+                    Vec::new(),
+                )?;
                 record_read(&registration.buffer, &point);
                 return Ok(());
             }
         }
         // SAFETY: `T: DeviceRepr` is plain data.
         let raw = unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u8>(), bytes as usize) };
-        self.copy_staged(raw, range)
+        self.copy_staged("memcpy_htod", raw, range)
     }
 
     /// Experimental, and may be removed. Like
@@ -606,7 +689,18 @@ impl CudaStream {
             let raw = std::slice::from_raw_parts(src.as_ptr().cast::<u8>(), bytes);
             Buffer::import_host(self.device(), raw)
         }?;
-        self.copy_to_device(source, source_offset, dst.raw_mut(), bytes as u64)?;
+        source.set_name(format_args!(
+            "memcpy_htod_unstaged source {}",
+            Bytes(bytes as u64)
+        ));
+        let dst = dst.raw_mut();
+        self.copy_to_device(
+            "memcpy_htod_unstaged",
+            source,
+            source_offset,
+            dst,
+            bytes as u64,
+        )?;
         self.synchronize()
     }
 
@@ -636,7 +730,12 @@ impl CudaStream {
             Some((buffer, size)) if size >= bytes && Arc::strong_count(&buffer) == 1 => {
                 (buffer, size)
             }
-            _ => (Buffer::staging(self.device(), bytes)?, bytes),
+            _ => {
+                let buffer = Buffer::staging(self.device(), bytes)?;
+                let stream = &self.core.name;
+                buffer.set_name(format_args!("{stream} reused staging {}", Bytes(bytes)));
+                (buffer, bytes)
+            }
         };
         // SAFETY: `T: DeviceRepr` is plain data, and the GPU isn't using `staging`, as above.
         unsafe {
@@ -644,7 +743,7 @@ impl CudaStream {
             staging.write_bytes(raw);
         }
         *self.core.reusable.lock().unwrap() = Some((staging.clone(), size));
-        self.copy_to_device(staging, 0, dst.raw_mut(), bytes)
+        self.copy_to_device("memcpy_htod_reused", staging, 0, dst.raw_mut(), bytes)
     }
 
     /// Allocates a slice holding a copy of host data.
@@ -673,6 +772,7 @@ impl CudaStream {
             return Ok(());
         }
         let staging = Buffer::staging(self.device(), bytes)?;
+        staging.set_name(format_args!("memcpy_dtoh staging {}", Bytes(bytes)));
         let (from, to) = (
             src.raw(),
             RawRange {
@@ -680,7 +780,15 @@ impl CudaStream {
                 offset: 0,
             },
         );
-        self.copy(from, to, bytes, &[from.buffer], &[], vec![staging.clone()])?;
+        self.copy(
+            "memcpy_dtoh",
+            from,
+            to,
+            bytes,
+            &[from.buffer],
+            &[],
+            vec![staging.clone()],
+        )?;
         self.synchronize()?;
         let dst = dst.as_host_slice_mut();
         // SAFETY: the GPU has finished, `dst` holds at least `bytes` and `T` is plain data.
@@ -721,8 +829,16 @@ impl CudaStream {
             return Ok(());
         }
         let (from, to) = (src.raw(), dst.raw_mut());
-        self.copy(from, to, bytes, &[from.buffer], &[to.buffer], Vec::new())
-            .map(drop)
+        self.copy(
+            "memcpy_dtod",
+            from,
+            to,
+            bytes,
+            &[from.buffer],
+            &[to.buffer],
+            Vec::new(),
+        )
+        .map(drop)
     }
 
     /// Allocates a slice holding a copy of a slice or view.
@@ -754,7 +870,7 @@ mod tests {
     impl Gate {
         fn new(ctx: &Arc<CudaContext>) -> Self {
             Self {
-                core: StreamCore::new(&ctx.device, None).unwrap(),
+                core: StreamCore::new(&ctx.device, None, "test").unwrap(),
             }
         }
 
@@ -764,7 +880,10 @@ mod tests {
                 timeline: self.core.timeline.clone(),
                 value: 1,
             };
-            CudaStream::new(ctx, StreamCore::new(&ctx.device, Some(after)).unwrap())
+            CudaStream::new(
+                ctx,
+                StreamCore::new(&ctx.device, Some(after), "test").unwrap(),
+            )
         }
 
         fn open(&self) {

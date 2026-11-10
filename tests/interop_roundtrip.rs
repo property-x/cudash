@@ -24,9 +24,9 @@ fn vulkan() -> Option<Vk> {
             .vk_instance()
             .get_physical_device_queue_family_properties(gpu.ctx.vk_physical_device())
     }
-        .iter()
-        .position(|q| q.queue_flags.contains(vk::QueueFlags::COMPUTE))
-        .expect("cudash needs a compute queue") as u32;
+    .iter()
+    .position(|q| q.queue_flags.contains(vk::QueueFlags::COMPUTE))
+    .expect("cudash needs a compute queue") as u32;
     let queue = unsafe { gpu.ctx.vk_device().get_device_queue(queue_family, 0) };
     Some(Vk {
         gpu,

@@ -80,6 +80,8 @@ impl VulkanExporter {
             .push_next(&mut type_info)
             .push_next(&mut export_info);
         let semaphore = unsafe { self.device.device.create_semaphore(&create_info, None) }?;
+        self.device
+            .set_name(semaphore, format_args!("SharedSemaphore"));
         Ok(ExportedSemaphore {
             device: self.device.clone(),
             semaphore,

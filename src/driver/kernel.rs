@@ -154,6 +154,7 @@ impl CudaModule {
             .size(device.properties.limits.max_push_constants_size)];
         let info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&ranges);
         let layout = unsafe { device.device.create_pipeline_layout(&info, None) }?;
+        device.set_name(layout, format_args!("{name}"));
         Ok(CudaFunction {
             inner: Arc::new(FunctionInner {
                 device,
@@ -217,6 +218,9 @@ impl FunctionInner {
         let pipeline = unsafe {
             let info = vk::ShaderModuleCreateInfo::default().code(&code);
             let module = device.create_shader_module(&info, None)?;
+            let name = self.name.to_string_lossy();
+            self.device
+                .set_name(module, format_args!("{name} block {block_dim:?}"));
             let stage = vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::COMPUTE)
                 .module(module)
@@ -226,7 +230,10 @@ impl FunctionInner {
                 .layout(self.layout)];
             let created = device.create_compute_pipelines(vk::PipelineCache::null(), &info, None);
             device.destroy_shader_module(module, None);
-            created.map_err(|(_, e)| e)?[0]
+            let pipeline = created.map_err(|(_, e)| e)?[0];
+            self.device
+                .set_name(pipeline, format_args!("{name} block {block_dim:?}"));
+            pipeline
         };
         pipelines.insert(block_dim, pipeline);
         Ok(pipeline)
@@ -359,6 +366,12 @@ impl LaunchArgs<'_> {
         let reads: Vec<_> = self.reads.iter().collect();
         let writes: Vec<_> = self.writes.iter().collect();
         self.stream.core.submit(
+            format_args!(
+                "launch {} grid {:?} block {:?}",
+                function.name.to_string_lossy(),
+                config.grid_dim,
+                config.block_dim
+            ),
             &reads,
             &writes,
             vec![function.clone()],

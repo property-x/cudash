@@ -530,7 +530,7 @@ fn when_copy_panics(w: &mut World, name: String, len: usize, _ty: String) {
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = download_into(buf, &stream, &mut host);
     }))
-        .is_err();
+    .is_err();
     w.panicked = panicked;
 }
 
@@ -908,7 +908,7 @@ fn then_range_formula(w: &mut World, from: usize, to: usize, name: String, a: St
     expect_by_index(&values[from..=to], ty, |i| {
         Scalar::Float(a * (from + i) as f64 + b)
     })
-        .expect("range formula holds");
+    .expect("range formula holds");
 }
 
 #[then(regex = r#"^the elements (\d+) to (\d+) of "(\w+)" still hold (\S+)$"#)]

@@ -67,7 +67,7 @@ impl SharedSemaphore {
         unsafe {
             sys::cuSignalExternalSemaphoresAsync(&self.imported.raw, &params, 1, stream.cu_stream())
         }
-            .result()?;
+        .result()?;
         Ok(value)
     }
 
@@ -86,7 +86,7 @@ impl SharedSemaphore {
         unsafe {
             sys::cuWaitExternalSemaphoresAsync(&self.imported.raw, &params, 1, stream.cu_stream())
         }
-            .result()?;
+        .result()?;
         Ok(())
     }
 

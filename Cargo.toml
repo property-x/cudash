@@ -16,8 +16,11 @@ cudarc = { version = "0.19", optional = true, default-features = false, features
 [features]
 # On by default. Enables `cudash::interop` and the cudarc dependency.
 # Even with it should run on any GPU without the interop.
-default = ["cudarc"]
+default = ["cudarc", "kernel_debug"]
 cudarc = ["dep:cudarc"]
+# On by default. Compiles the Slang kernels with `-g`, so RenderDoc shows their source and can step
+# through a thread. This embeds the kernel source in the SPIR-V: turn it off for builds you ship.
+kernel_debug = []
 
 [dev-dependencies]
 cucumber = "0.23"

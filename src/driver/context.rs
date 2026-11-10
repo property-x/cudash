@@ -40,7 +40,7 @@ impl CudaContext {
     /// Requires Vulkan 1.3.
     pub fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
         let device = Device::new(ordinal)?;
-        let default_core = StreamCore::new(&device, None)?;
+        let default_core = StreamCore::new(&device, None, "default_stream")?;
         Ok(Arc::new(Self {
             device,
             default_core,
@@ -77,7 +77,10 @@ impl CudaContext {
 
     /// A new, independent stream.
     pub fn new_stream(self: &Arc<Self>) -> Result<Arc<CudaStream>, DriverError> {
-        Ok(CudaStream::new(self, StreamCore::new(&self.device, None)?))
+        Ok(CudaStream::new(
+            self,
+            StreamCore::new(&self.device, None, "new_stream")?,
+        ))
     }
 
     /// Blocks until all work on this GPU has finished.
