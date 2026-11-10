@@ -16,7 +16,7 @@ use super::{DriverError, stream::Tracking};
 const API_VERSION: u32 = vk::API_VERSION_1_3;
 
 pub(crate) struct Device {
-    _entry: ash::Entry,
+    /// A handle to the process-wide instance from [`instance`], which is never destroyed.
     pub(crate) instance: ash::Instance,
     pub(crate) physical_device: vk::PhysicalDevice,
     pub(crate) device: ash::Device,
@@ -40,10 +40,27 @@ struct HostImport {
     alignment: u64,
 }
 
-/// Loads Vulkan and lists suitable GPUs, discrete ones first, so ordinal 0 is the
-/// one a CUDA user would expect.
-/// If portability extension is enabled, we list these devices as well, e.g. MoltenVK.
-fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), DriverError> {
+/// The loader and the one instance every context shares. It lives until the process exits,
+/// because destroying the last instance unloads the driver, and NVIDIA's driver stops
+/// loading after a few dozen unloads.
+struct Vulkan {
+    _entry: ash::Entry,
+    instance: ash::Instance,
+}
+
+/// The shared instance, created on first use. A failure isn't cached, so later calls retry.
+fn instance() -> Result<&'static ash::Instance, DriverError> {
+    static VULKAN: Mutex<Option<&'static Vulkan>> = Mutex::new(None);
+    let mut slot = VULKAN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(vulkan) = *slot {
+        return Ok(&vulkan.instance);
+    }
+    let vulkan: &'static Vulkan = Box::leak(Box::new(create_instance()?));
+    *slot = Some(vulkan);
+    Ok(&vulkan.instance)
+}
+
+fn create_instance() -> Result<Vulkan, DriverError> {
     unsafe {
         let entry = ash::Entry::load().map_err(|e| DriverError::NoVulkan(e.to_string()))?;
         let app = vk::ApplicationInfo::default().api_version(API_VERSION);
@@ -59,13 +76,19 @@ fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), D
                 .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
         }
         let instance = entry.create_instance(&info, None)?;
-        let mut devices = match instance.enumerate_physical_devices() {
-            Ok(devices) => devices,
-            Err(e) => {
-                instance.destroy_instance(None);
-                return Err(e.into());
-            }
-        };
+        Ok(Vulkan {
+            _entry: entry,
+            instance,
+        })
+    }
+}
+
+/// Lists suitable GPUs, discrete ones first, so ordinal 0 is the one a CUDA user would expect.
+/// If portability extension is enabled, we list these devices as well, e.g. MoltenVK.
+fn enumerate() -> Result<(&'static ash::Instance, Vec<vk::PhysicalDevice>), DriverError> {
+    let instance = instance()?;
+    unsafe {
+        let mut devices = instance.enumerate_physical_devices()?;
         devices.retain(|&pd| {
             let properties = instance.get_physical_device_properties(pd);
             properties.api_version >= API_VERSION
@@ -76,7 +99,7 @@ fn enumerate() -> Result<(ash::Entry, ash::Instance, Vec<vk::PhysicalDevice>), D
             let kind = instance.get_physical_device_properties(pd).device_type;
             kind != vk::PhysicalDeviceType::DISCRETE_GPU
         });
-        Ok((entry, instance, devices))
+        Ok((instance, devices))
     }
 }
 
@@ -118,27 +141,15 @@ fn missing_required_feature(
 
 impl Device {
     pub(crate) fn count() -> Result<i32, DriverError> {
-        let (_entry, instance, devices) = enumerate()?;
-        unsafe { instance.destroy_instance(None) };
-        Ok(devices.len() as i32)
+        Ok(enumerate()?.1.len() as i32)
     }
 
     pub(crate) fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
-        let (entry, instance, devices) = enumerate()?;
-        let created = devices
-            .get(ordinal)
-            .ok_or(DriverError::NoSuchDevice(ordinal))
-            .and_then(|&pd| {
-                let extensions = available_extensions(&instance, pd);
-                unsafe { Self::create(&instance, pd, &extensions) }.map(|c| (c, extensions))
-            });
-        let ((device, queue_family, physical_device), extensions) = match created {
-            Ok(created) => created,
-            Err(e) => {
-                unsafe { instance.destroy_instance(None) };
-                return Err(e);
-            }
-        };
+        let (instance, devices) = enumerate()?;
+        let pd = *devices.get(ordinal).ok_or(DriverError::NoSuchDevice(ordinal))?;
+        let extensions = available_extensions(instance, pd);
+        let (device, queue_family, physical_device) =
+            unsafe { Self::create(instance, pd, &extensions) }?;
         unsafe {
             let mut id = vk::PhysicalDeviceIDProperties::default();
             let mut import = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
@@ -150,7 +161,7 @@ impl Device {
             instance.get_physical_device_properties2(physical_device, &mut properties);
             let properties = properties.properties;
             let host_import = has_host_import.then(|| HostImport {
-                functions: ext::external_memory_host::Device::new(&instance, &device),
+                functions: ext::external_memory_host::Device::new(instance, &device),
                 alignment: import.min_imported_host_pointer_alignment,
             });
             Ok(Arc::new(Self {
@@ -158,8 +169,7 @@ impl Device {
                 memory: instance.get_physical_device_memory_properties(physical_device),
                 uuid: id.device_uuid,
                 properties,
-                _entry: entry,
-                instance,
+                instance: instance.clone(),
                 physical_device,
                 device,
                 queue_family,
@@ -267,7 +277,6 @@ impl Drop for Device {
         unsafe {
             let _ = self.device.device_wait_idle();
             self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
         }
     }
 }
