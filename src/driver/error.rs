@@ -22,6 +22,8 @@ pub enum DriverError {
     HostMemoryAlreadyRegistered,
     /// No registered host memory starts at this address.
     HostMemoryNotRegistered,
+    /// An image can't have this size or format on this GPU.
+    InvalidImage(String),
 }
 
 impl fmt::Display for DriverError {
@@ -36,6 +38,7 @@ impl fmt::Display for DriverError {
             Self::LaunchLimit(e) => write!(f, "launch exceeds a device limit: {e}"),
             Self::HostMemoryAlreadyRegistered => f.write_str("host memory is already registered"),
             Self::HostMemoryNotRegistered => f.write_str("no registered host memory starts here"),
+            Self::InvalidImage(e) => write!(f, "invalid image: {e}"),
         }
     }
 }

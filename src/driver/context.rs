@@ -95,6 +95,16 @@ impl CudaContext {
         &self.device.instance
     }
 
+    /// What RenderDoc calls this context's device for Vulkan: the instance's dispatch table
+    /// pointer (`RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE`). Pass it to
+    /// [`RenderDoc::start`](crate::debug::RenderDoc::start) and `end`.
+    pub fn renderdoc_device_pointer(&self) -> *mut std::ffi::c_void {
+        let instance =
+            vk::Handle::as_raw(self.vk_instance().handle()) as *const *mut std::ffi::c_void;
+        // SAFETY: a dispatchable Vulkan handle points at its dispatch table pointer.
+        unsafe { *instance }
+    }
+
     /// The Vulkan physical device behind this context.
     pub fn vk_physical_device(&self) -> vk::PhysicalDevice {
         self.device.physical_device

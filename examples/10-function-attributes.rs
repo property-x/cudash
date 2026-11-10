@@ -12,8 +12,8 @@ fn main() -> Result<(), DriverError> {
 
     // Load the module with the sin_kernel
     let module = ctx.load_module(Spirv::from_file(concat!(
-    env!("OUT_DIR"),
-    "/sin_kernel.spv"
+        env!("OUT_DIR"),
+        "/sin_kernel.spv"
     )))?;
     let _sin_kernel = module.load_function("sin_kernel")?;
 
@@ -21,7 +21,7 @@ fn main() -> Result<(), DriverError> {
         ctx.vk_instance()
             .get_physical_device_properties(ctx.vk_physical_device())
     }
-        .limits;
+    .limits;
 
     println!("=== Limits for any kernel ===");
     println!();

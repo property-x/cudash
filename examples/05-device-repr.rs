@@ -21,8 +21,8 @@ fn main() -> Result<(), DriverError> {
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_file(concat!(
-    env!("OUT_DIR"),
-    "/device_repr.spv"
+        env!("OUT_DIR"),
+        "/device_repr.spv"
     )))?;
     let f = module.load_function("my_custom_kernel")?;
 

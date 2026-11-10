@@ -341,6 +341,8 @@ pub(crate) struct Buffer {
     pub(crate) device: Arc<Device>,
     pub(crate) buffer: vk::Buffer,
     pub(crate) memory: vk::DeviceMemory,
+    /// Index of `memory`'s type, for binding an image to the same memory.
+    pub(crate) memory_type: u32,
     pub(crate) address: u64,
     mapped: Option<NonNull<u8>>,
     pub(crate) tracking: Mutex<Tracking>,
@@ -404,6 +406,7 @@ impl Buffer {
             device: device.clone(),
             buffer: vk::Buffer::null(),
             memory: vk::DeviceMemory::null(),
+            memory_type: 0,
             address: 0,
             mapped: None,
             tracking: Mutex::default(),
@@ -471,6 +474,7 @@ impl Buffer {
                 }
             }
             result.memory = vk_device.allocate_memory(&allocate, None)?;
+            result.memory_type = memory_type;
             result.allocation_size = requirements.size;
             vk_device.bind_buffer_memory(result.buffer, result.memory, 0)?;
             if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {

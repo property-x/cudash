@@ -8,8 +8,8 @@ fn main() -> Result<(), DriverError> {
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_file(concat!(
-    env!("OUT_DIR"),
-    "/constant_memory.spv"
+        env!("OUT_DIR"),
+        "/constant_memory.spv"
     )))?;
 
     // Set up polynomial coefficients: 1.0 + 2.0*x + 3.0*x^2 + 4.0*x^3

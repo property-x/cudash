@@ -130,6 +130,31 @@ pub trait DevicePtr<T>: DeviceSlice<T> {
         let address = raw.buffer.address + raw.offset;
         (address, SyncOnDrop::new(stream, raw.buffer, false))
     }
+
+    /// A `width * height` image over this memory, in rows, without copying. See [`CudaImage`].
+    ///
+    /// # Panics
+    /// If this doesn't hold exactly `width * height` elements.
+    fn as_image(&self, width: u32, height: u32) -> Result<super::CudaImage<T>, DriverError>
+    where
+        T: super::ImageFormat,
+        Self: Sized,
+    {
+        super::image::image_over(self, width, height)
+    }
+
+    /// A copy of this memory as a new `width * height` image, on this slice's stream. For a
+    /// view that follows the slice instead, see [`Self::as_image`].
+    ///
+    /// # Panics
+    /// If this doesn't hold exactly `width * height` elements.
+    fn to_image(&self, width: u32, height: u32) -> Result<super::CudaImage<T>, DriverError>
+    where
+        T: super::ImageFormat,
+        Self: Sized,
+    {
+        self.stream().clone_to_image(self, width, height)
+    }
 }
 
 /// Device memory that can be written: [`CudaSlice`] or [`CudaViewMut`].
