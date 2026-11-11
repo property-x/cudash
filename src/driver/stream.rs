@@ -86,6 +86,7 @@ struct State {
     last: Option<Point>,
     frame_id: Option<u64>,
     pending: VecDeque<Pending>,
+    available: Vec<vk::CommandBuffer>,
 }
 
 static NEXT_FRAME_ID: AtomicU64 = AtomicU64::new(1);
@@ -111,6 +112,7 @@ pub(crate) struct StreamCore {
 /// shortcut: at most this many staging buffers kept per stream, whatever their size.
 /// Bound it by bytes too if streams copy many sizes.
 const STAGING_KEPT: usize = 4;
+const COMMAND_BUFFERS_KEPT: usize = 16;
 
 impl StreamCore {
     /// `kind` is how the stream was made, such as `default_stream`, and names it in tools.
@@ -132,7 +134,10 @@ impl StreamCore {
             });
             let info = vk::CommandPoolCreateInfo::default()
                 .queue_family_index(device.queue_family)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+                .flags(
+                    vk::CommandPoolCreateFlags::TRANSIENT
+                        | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+                );
             let pool = vk_device.create_command_pool(&info, None)?;
             device.set_name(timeline.semaphore, format_args!("{name}"));
             device.set_name(pool, format_args!("{name}"));
@@ -146,6 +151,7 @@ impl StreamCore {
                     last: after,
                     frame_id: None,
                     pending: VecDeque::new(),
+                    available: Vec::new(),
                 }),
                 reusable: Mutex::new(None),
                 staging: Mutex::new(Vec::new()),
@@ -160,7 +166,11 @@ impl StreamCore {
         let done = unsafe { device.get_semaphore_counter_value(self.timeline.semaphore) }?;
         while state.pending.front().is_some_and(|p| p.value <= done) {
             let finished = state.pending.pop_front().expect("checked by the loop");
-            unsafe { device.free_command_buffers(self.pool, &[finished.command_buffer]) };
+            if state.available.len() < COMMAND_BUFFERS_KEPT {
+                state.available.push(finished.command_buffer);
+            } else {
+                unsafe { device.free_command_buffers(self.pool, &[finished.command_buffer]) };
+            }
         }
         Ok(())
     }
@@ -273,11 +283,22 @@ impl StreamCore {
         // shortcut: one queue submission per operation, batch them if this shows up in
         // profiles. Timeline waits give every operation a full memory dependency on what
         // came before, so no pipeline barriers are needed.
-        let command_buffer = unsafe {
-            let allocate = vk::CommandBufferAllocateInfo::default()
-                .command_pool(self.pool)
-                .command_buffer_count(1);
-            device.allocate_command_buffers(&allocate)?[0]
+        let command_buffer = match state.available.pop() {
+            Some(command_buffer) => {
+                unsafe {
+                    device.reset_command_buffer(
+                        command_buffer,
+                        vk::CommandBufferResetFlags::empty(),
+                    )?;
+                }
+                command_buffer
+            }
+            None => unsafe {
+                let allocate = vk::CommandBufferAllocateInfo::default()
+                    .command_pool(self.pool)
+                    .command_buffer_count(1);
+                device.allocate_command_buffers(&allocate)?[0]
+            },
         };
         let submitted = unsafe {
             let begin = vk::CommandBufferBeginInfo::default()
