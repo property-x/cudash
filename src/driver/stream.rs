@@ -742,10 +742,15 @@ impl CudaStream {
 /// behind a semaphore only the test can signal, then check what has and hasn't run.
 #[cfg(test)]
 mod tests {
-    use std::{thread::sleep, time::Duration};
+    use std::{sync::Condvar, thread::sleep, time::Duration};
 
     use super::*;
     use crate::driver::DevicePtr;
+
+    /// How many gates exist. NVIDIA's driver waits for the GPU to go idle while importing
+    /// read-only memory, holding the lock that opening a gate needs, so that import waits for 0.
+    static GATES: Mutex<usize> = Mutex::new(0);
+    static NO_GATES: Condvar = Condvar::new();
 
     struct Gate {
         core: Arc<StreamCore>,
@@ -753,6 +758,7 @@ mod tests {
 
     impl Gate {
         fn new(ctx: &Arc<CudaContext>) -> Self {
+            *GATES.lock().unwrap_or_else(|e| e.into_inner()) += 1;
             Self {
                 core: StreamCore::new(&ctx.device, None).unwrap(),
             }
@@ -772,6 +778,13 @@ mod tests {
                 .semaphore(self.core.timeline.semaphore)
                 .value(1);
             unsafe { self.core.device.device.signal_semaphore(&info) }.unwrap();
+        }
+    }
+
+    impl Drop for Gate {
+        fn drop(&mut self) {
+            *GATES.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+            NO_GATES.notify_all();
         }
     }
 
@@ -893,6 +906,10 @@ mod tests {
     #[test]
     fn unstaged_is_an_error_or_correct_for_static_data() {
         static DATA: [u8; 1 << 16] = [7; 1 << 16];
+        // NVIDIA's read-only import waits for an idle GPU and blocks Gate::open, so gates deadlock.
+        let _no_gates = NO_GATES
+            .wait_while(GATES.lock().unwrap_or_else(|e| e.into_inner()), |n| *n > 0)
+            .unwrap_or_else(|e| e.into_inner());
         let stream = CudaContext::new(0).unwrap().default_stream();
         let mut dst = stream.alloc_zeros::<u8>(DATA.len()).unwrap();
         if stream.memcpy_htod_unstaged(&DATA, &mut dst).is_ok() {
