@@ -236,3 +236,16 @@ fn ptx_matches_the_spirv_kernels() {
         assert_eq!(signature.matches(".param").count(), params, "{signature}");
     }
 }
+
+/// NVIDIA's driver stopped loading after about 22 contexts were created and dropped in one process.
+#[test]
+fn many_contexts_in_turn() -> Result<(), DriverError> {
+    for i in 0..100 {
+        assert!(CudaContext::device_count()? >= 1, "context {i}");
+        let ctx = CudaContext::new(0)?;
+        let stream = ctx.default_stream();
+        let x = stream.clone_htod(&[i as u32; 4])?;
+        assert_eq!(stream.clone_dtoh(&x)?, [i as u32; 4]);
+    }
+    Ok(())
+}
