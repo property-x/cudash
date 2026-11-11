@@ -7,7 +7,7 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -84,8 +84,11 @@ struct State {
     last_value: u64,
     /// What the next submission waits for. Starts on the source stream if forked.
     last: Option<Point>,
+    frame_id: Option<u64>,
     pending: VecDeque<Pending>,
 }
+
+static NEXT_FRAME_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The part of a stream that's shared by every handle to it.
 pub(crate) struct StreamCore {
@@ -141,6 +144,7 @@ impl StreamCore {
                 state: Mutex::new(State {
                     last_value: 0,
                     last: after,
+                    frame_id: None,
                     pending: VecDeque::new(),
                 }),
                 reusable: Mutex::new(None),
@@ -227,7 +231,8 @@ impl StreamCore {
         keep: Vec<Keep>,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), DriverError> {
-        self.submit_at(label, reads, writes, keep, record).map(drop)
+        self.submit_at(label, reads, writes, keep, false, record)
+            .map(drop)
     }
 
     /// [`Self::submit`], returning the point the submission signals.
@@ -237,11 +242,16 @@ impl StreamCore {
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
         mut keep: Vec<Keep>,
+        frame_end: bool,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<Point, DriverError> {
         let device = &self.device.device;
         let mut state = self.state.lock().unwrap();
         self.reclaim(&mut state)?;
+        let frame_id = state.frame_id;
+        if frame_end && frame_id.is_none() {
+            return Err(DriverError::NoActiveFrame);
+        }
 
         let waits = required_waits(state.last.as_ref(), reads, writes);
         let wait_infos: Vec<_> = waits
@@ -293,10 +303,18 @@ impl StreamCore {
                     device.end_command_buffer(command_buffer)?;
                     let command_buffers =
                         [vk::CommandBufferSubmitInfo::default().command_buffer(command_buffer)];
-                    let submit = vk::SubmitInfo2::default()
+                    let mut frame_boundary =
+                        vk::FrameBoundaryEXT::default().frame_id(frame_id.unwrap_or_default());
+                    if frame_end {
+                        frame_boundary = frame_boundary.flags(vk::FrameBoundaryFlagsEXT::FRAME_END);
+                    }
+                    let mut submit = vk::SubmitInfo2::default()
                         .wait_semaphore_infos(&wait_infos)
                         .signal_semaphore_infos(&signal_infos)
                         .command_buffer_infos(&command_buffers);
+                    if frame_id.is_some() {
+                        submit = submit.push_next(&mut frame_boundary);
+                    }
                     let queue = self.device.queue.lock().unwrap();
                     device.queue_submit2(*queue, &[submit], vk::Fence::null())
                 })
@@ -326,12 +344,40 @@ impl StreamCore {
         );
         state.last_value = value;
         state.last = Some(point.clone());
+        if frame_end {
+            state.frame_id = None;
+        }
         state.pending.push_back(Pending {
             value,
             command_buffer,
             _keep: keep,
         });
         Ok(point)
+    }
+
+    fn frame(&self) -> Result<u64, DriverError> {
+        if !self.device.frame_boundary {
+            return Err(DriverError::MissingFeature("VK_EXT_frame_boundary"));
+        }
+        let mut state = self.state.lock().unwrap();
+        if let Some(frame_id) = state.frame_id {
+            return Ok(frame_id);
+        }
+        let frame_id = NEXT_FRAME_ID.fetch_add(1, Ordering::Relaxed);
+        state.frame_id = Some(frame_id);
+        Ok(frame_id)
+    }
+
+    fn stop_frame(&self) -> Result<(), DriverError> {
+        self.submit_at(
+            format_args!("frame boundary"),
+            &[],
+            &[],
+            Vec::new(),
+            true,
+            |_, _| {},
+        )
+        .map(drop)
     }
 }
 
@@ -471,6 +517,23 @@ impl CudaStream {
         self.core.synchronize()
     }
 
+    /// Whether this device supports off-screen frame boundaries for tools such as Nsight Graphics.
+    pub fn supports_frame_boundaries(&self) -> bool {
+        self.core.device.frame_boundary
+    }
+
+    /// Marks subsequent submissions on this stream as one off-screen frame for tools such as
+    /// Nsight Graphics and returns its ID. Repeated calls return the active frame's ID. Requires
+    /// `VK_EXT_frame_boundary`; call [`Self::stop_frame`] afterwards.
+    pub fn frame(&self) -> Result<u64, DriverError> {
+        self.core.frame()
+    }
+
+    /// Marks the final submission of the active off-screen frame.
+    pub fn stop_frame(&self) -> Result<(), DriverError> {
+        self.core.stop_frame()
+    }
+
     /// A new stream whose work starts after work already queued on this one.
     pub fn fork(&self) -> Result<Arc<Self>, DriverError> {
         let core = StreamCore::new(&self.core.device, self.core.last_point(), "fork")?;
@@ -563,6 +626,7 @@ impl CudaStream {
             reads,
             writes,
             keep,
+            false,
             |device, commands| unsafe {
                 device.cmd_copy_buffer(commands, from, to, &[region]);
             },
@@ -942,6 +1006,25 @@ mod tests {
         );
         other.synchronize().unwrap();
         assert_eq!(Arc::strong_count(&buffer), 1);
+    }
+
+    #[test]
+    fn frame_returns_the_active_id_until_stopped() {
+        let stream = CudaContext::new(0).unwrap().default_stream();
+        if !stream.supports_frame_boundaries() {
+            assert!(matches!(
+                stream.frame(),
+                Err(DriverError::MissingFeature("VK_EXT_frame_boundary"))
+            ));
+            return;
+        }
+
+        let first = stream.frame().unwrap();
+        assert_eq!(stream.frame().unwrap(), first);
+        stream.stop_frame().unwrap();
+        let next = stream.frame().unwrap();
+        assert_ne!(next, first);
+        stream.stop_frame().unwrap();
     }
 
     #[test]

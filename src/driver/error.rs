@@ -12,6 +12,8 @@ pub enum DriverError {
     NoSuchDevice(usize),
     /// The GPU lacks a Vulkan feature cudash relies on.
     MissingFeature(&'static str),
+    /// No frame boundary is active on this stream.
+    NoActiveFrame,
     /// A module couldn't be read or isn't valid SPIR-V.
     InvalidModule(String),
     /// The module has no compute entry point with this name.
@@ -33,6 +35,7 @@ impl fmt::Display for DriverError {
             Self::NoVulkan(e) => write!(f, "couldn't load Vulkan: {e}"),
             Self::NoSuchDevice(n) => write!(f, "no suitable GPU with ordinal {n}"),
             Self::MissingFeature(name) => write!(f, "GPU lacks the Vulkan feature {name}"),
+            Self::NoActiveFrame => f.write_str("no frame boundary is active"),
             Self::InvalidModule(e) => write!(f, "invalid module: {e}"),
             Self::FunctionNotFound(n) => write!(f, "no compute entry point named {n}"),
             Self::LaunchLimit(e) => write!(f, "launch exceeds a device limit: {e}"),

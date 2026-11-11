@@ -37,7 +37,7 @@ doctor:
         printf '%-12s %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
     done
     printf '%-12s %s\n' nvrtc "$(ldconfig -p | grep -m1 'libnvrtc\.so ' | sed 's/.*=> //' || true)"
-    printf '%-12s %s\n' renderdoc-layer "$(test -f /etc/vulkan/implicit_layer.d/renderdoc_capture.json && echo registered || echo MISSING)"
+    printf '%-12s %s\n' renderdoc-layer "$(if [ -f /etc/vulkan/implicit_layer.d/renderdoc_capture.json ] || [ -f "$HOME/.local/share/vulkan/implicit_layer.d/renderdoc_capture.json" ]; then echo registered; else echo MISSING; fi)"
     vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|apiVersion' || echo "no Vulkan GPU found"
 
 # Capture one frame of examples/frame_capture in RenderDoc, then open it in qrenderdoc. Needs `just setup`
@@ -57,6 +57,51 @@ renderdoc-example name:
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         qrenderdoc "$PWD/$capture" >/dev/null 2>&1 &
     fi
+
+# Capture the off-screen frame_capture example in Nsight Graphics without opening the GUI.
+nsight-capture-example name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --example {{name}}
+    executable="$PWD/target/debug/examples/{{name}}"
+    nsight_graphics="${NSIGHT_GRAPHICS:-ngfx-ui-for-linux}"
+    if ! command -v "$nsight_graphics" >/dev/null 2>&1; then
+        echo "Nsight Graphics executable not found: $nsight_graphics" >&2
+        exit 1
+    fi
+    nsight_capture="${NSIGHT_GRAPHICS_CAPTURE:-$(dirname "$(readlink -f "$(command -v "$nsight_graphics")")")/ngfx-capture}"
+    if [ ! -x "$nsight_capture" ]; then
+        echo "Nsight Graphics capture CLI not found: $nsight_capture" >&2
+        exit 1
+    fi
+    mkdir -p target/nsight
+    capture="$PWD/target/nsight/{{name}}-$(date +%s%N).ngfx-capture"
+    frame_count="${NSIGHT_FRAME_COUNT:-1}"
+    if [ "{{name}}" = "shader_animation" ]; then
+        frame_count="${NSIGHT_FRAME_COUNT:-60}"
+    fi
+    capture_status=0
+    if "$nsight_capture" \
+        --exe "$executable" \
+        --working-dir "$PWD" \
+        --capture-countdown-timer 10 \
+        --frame-count "$frame_count" \
+        --delimiter-vk-frame-boundary-ext \
+        --no-block-on-first-incompatibility \
+        --no-hud \
+        --output-file "$capture"; then
+        :
+    else
+        capture_status=$?
+    fi
+    if [ ! -s "$capture" ]; then
+        echo "Nsight Graphics wrote no capture; the GPU must support VK_EXT_frame_boundary" >&2
+        exit 1
+    fi
+    if [ "$capture_status" -ne 0 ]; then
+        echo "Nsight Graphics exited with status $capture_status after saving the capture" >&2
+    fi
+    printf 'Nsight Graphics capture: %s\n' "$capture"
 
 # Build the library
 build:

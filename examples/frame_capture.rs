@@ -1,9 +1,12 @@
-//! Processes one 2560x2160 `f32` frame (the bench size) with a 3x3 box blur, copies the input and
+//! Processes a 2560x2160 `f32` frame (the bench size) with a 3x3 box blur, copies the input and
 //! the result into images so RenderDoc's texture viewer shows both, and marks it all as a frame
-//! for RenderDoc. A compute-only program never presents, so RenderDoc can't find the frame
-//! by itself: this calls its in-application API through the `renderdoc` crate.
+//! for RenderDoc. Nsight mode runs eight off-screen frames marked with `VK_EXT_frame_boundary`.
+//! A compute-only program never presents, so RenderDoc can't find the frame by itself: this calls
+//! its in-application API through the `renderdoc` crate.
 //!
-//! Run: `just renderdoc-example frame_capture`, then open the `.rdc` it prints in `qrenderdoc`. Without RenderDoc it runs the same and captures nothing.
+//! Run: `just renderdoc-example frame_capture`, then open the `.rdc` it prints in `qrenderdoc`.
+//! Run `just nsight-capture-example frame_capture` for a headless Nsight Graphics capture. Without
+//! RenderDoc, the normal run executes but captures nothing.
 
 use cudash::driver::*;
 use renderdoc::{RenderDoc, V110};
@@ -17,6 +20,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = ctx.default_stream();
     let module = ctx.load_module(Spirv::from_file(KERNEL))?;
     let f = module.load_function("computeMain")?;
+    if !stream.supports_frame_boundaries() {
+        return Err("the selected Vulkan device does not support VK_EXT_frame_boundary".into());
+    }
 
     // A checkerboard of 8-pixel squares in 0 and 1, so the blur's softened edges show up.
     let host: Vec<f32> = (0..WIDTH * HEIGHT)
@@ -37,15 +43,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         block_dim: (16, 16, 1),
         shared_mem_bytes: 0,
     };
-    let mut builder = stream.launch_builder(&f);
-    builder.arg(&src).arg(&mut dst).arg(&width).arg(&height);
-    unsafe { builder.launch(cfg) }?;
     // Kept until the end of the capture, so RenderDoc lists them.
     let _images = (
         src.as_image(WIDTH as u32, HEIGHT as u32)?,
         dst.as_image(WIDTH as u32, HEIGHT as u32)?,
     );
-    let out = stream.clone_dtoh(&dst)?;
+    let frame_count = 8;
+    let mut out = Vec::new();
+    for _ in 0..frame_count {
+        stream.frame()?;
+        let mut builder = stream.launch_builder(&f);
+        builder.arg(&src).arg(&mut dst).arg(&width).arg(&height);
+        unsafe { builder.launch(cfg) }?;
+        out = stream.clone_dtoh(&dst)?;
+        stream.stop_frame()?;
+    }
 
     if let Some(rd) = &mut renderdoc {
         rd.end_frame_capture(device, std::ptr::null());
@@ -69,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "not under RenderDoc, nothing captured"
     };
     println!(
-        "ok: blurred a {WIDTH}x{HEIGHT} frame on {}, {captured}",
+        "ok: blurred {frame_count} {WIDTH}x{HEIGHT} frame(s) on {}, {captured}",
         ctx.name()?
     );
     Ok(())

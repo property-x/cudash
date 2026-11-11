@@ -38,6 +38,7 @@ pub(crate) struct DeviceState {
     host_import: Option<HostImport>,
     /// The optional extensions that were enabled.
     pub(crate) extensions: Vec<&'static CStr>,
+    pub(crate) frame_boundary: bool,
     /// Labels operations for tools such as RenderDoc, where the instance has the extension.
     pub(crate) debug_utils: Option<ext::debug_utils::Device>,
     /// The matching CUDA context, created by `interop` on first use.
@@ -130,6 +131,7 @@ fn available_extensions(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Vec
     let mut wanted = vec![
         ext::external_memory_host::NAME,
         khr::portability_subset::NAME,
+        ext::frame_boundary::NAME,
     ];
     #[cfg(feature = "cudarc")]
     wanted.extend(crate::interop::EXPORT_EXTENSIONS);
@@ -221,7 +223,7 @@ impl Device {
             .get(ordinal)
             .ok_or(DriverError::NoSuchDevice(ordinal))?;
         let extensions = available_extensions(instance, pd);
-        let (device, queue_family, physical_device) =
+        let (device, queue_family, physical_device, frame_boundary) =
             unsafe { Self::create(instance, pd, &extensions) }?;
         unsafe {
             let mut id = vk::PhysicalDeviceIDProperties::default();
@@ -252,6 +254,7 @@ impl Device {
                 ordinal,
                 host_import,
                 extensions,
+                frame_boundary,
                 debug_utils,
                 #[cfg(feature = "cudarc")]
                 cuda: Default::default(),
@@ -264,16 +267,21 @@ impl Device {
         instance: &ash::Instance,
         pd: vk::PhysicalDevice,
         extensions: &[&CStr],
-    ) -> Result<(ash::Device, u32, vk::PhysicalDevice), DriverError> {
+    ) -> Result<(ash::Device, u32, vk::PhysicalDevice, bool), DriverError> {
         unsafe {
             let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
+            let frame_boundary_available = extensions.contains(&ext::frame_boundary::NAME);
+            let mut frame_boundary = vk::PhysicalDeviceFrameBoundaryFeaturesEXT::default();
             let mut features = {
                 let mut query = vk::PhysicalDeviceFeatures2::default()
                     .push_next(&mut v11)
                     .push_next(&mut v12)
                     .push_next(&mut v13);
+                if frame_boundary_available {
+                    query = query.push_next(&mut frame_boundary);
+                }
                 instance.get_physical_device_features2(pd, &mut query);
                 query.features
             };
@@ -285,11 +293,18 @@ impl Device {
             v11.p_next = std::ptr::null_mut();
             v12.p_next = std::ptr::null_mut();
             v13.p_next = std::ptr::null_mut();
+            let frame_boundary =
+                frame_boundary_available && frame_boundary.frame_boundary == vk::TRUE;
             let mut features = vk::PhysicalDeviceFeatures2::default()
                 .features(features)
                 .push_next(&mut v11)
                 .push_next(&mut v12)
                 .push_next(&mut v13);
+            let mut frame_boundary_features = vk::PhysicalDeviceFrameBoundaryFeaturesEXT::default()
+                .frame_boundary(frame_boundary);
+            if frame_boundary {
+                features = features.push_next(&mut frame_boundary_features);
+            }
 
             let queue_family = compute_queue_family(instance, pd).expect("checked in enumerate");
             let priorities = [1.0];
@@ -301,7 +316,12 @@ impl Device {
                 .queue_create_infos(&queues)
                 .enabled_extension_names(&extensions)
                 .push_next(&mut features);
-            Ok((instance.create_device(pd, &info, None)?, queue_family, pd))
+            Ok((
+                instance.create_device(pd, &info, None)?,
+                queue_family,
+                pd,
+                frame_boundary,
+            ))
         }
     }
 

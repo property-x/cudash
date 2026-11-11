@@ -11,7 +11,7 @@ use renderdoc::{RenderDoc, V110};
 const KERNEL: &str = concat!(env!("OUT_DIR"), "/shader_animation.spv");
 const WIDTH: usize = 960;
 const HEIGHT: usize = 540;
-const FRAMES: usize = 6;
+const FRAMES: usize = 60;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = CudaContext::new(0)?;
@@ -43,6 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (0.002f32, 5i32, 5.0f32, 0.2f32, 0.01f32);
 
     for frame in 0..FRAMES {
+        let _image_view = dst.as_image(WIDTH as u32, HEIGHT as u32);
+        stream.frame()?;
         // The widget's `time` is 1.0 + seconds * 3 at speed 1.
         let time = 1.0 + frame as f32 * 0.5 * 3.0;
         let mut builder = stream.launch_builder(&f);
@@ -71,6 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(&path, ppm)?;
             println!("t = {time:>4}: {}", path.display());
         }*/
+        stream.stop_frame()?;
+        stream.synchronize()?;
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
     // Kept until the end of the capture, so RenderDoc lists it.
     let _image = dst.as_image(WIDTH as u32, HEIGHT as u32)?;
