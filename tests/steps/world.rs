@@ -98,14 +98,14 @@ impl Ty {
 
 /// Element types that can be stored in a device buffer.
 pub trait Element:
-Copy
-+ PartialEq
-+ fmt::Debug
-+ 'static
-+ driver::DeviceRepr
-+ driver::ValidAsZeroBits
-+ CuDeviceRepr
-+ CuZeroBits
+    Copy
+    + PartialEq
+    + fmt::Debug
+    + 'static
+    + driver::DeviceRepr
+    + driver::ValidAsZeroBits
+    + CuDeviceRepr
+    + CuZeroBits
 {
     const TY: Ty;
     fn from_scalar(value: Scalar) -> Self;

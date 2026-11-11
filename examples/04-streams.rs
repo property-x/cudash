@@ -8,8 +8,8 @@ fn main() -> Result<(), DriverError> {
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_file(concat!(
-    env!("OUT_DIR"),
-    "/sin_kernel.spv"
+        env!("OUT_DIR"),
+        "/sin_kernel.spv"
     )))?;
     let f = module.load_function("sin_kernel")?;
 

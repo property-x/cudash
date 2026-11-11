@@ -21,15 +21,42 @@ setup:
     # Slang looks for the unversioned library name, which the package doesn't provide.
     sudo ln -sf libnvrtc.so.12 /usr/lib/x86_64-linux-gnu/libnvrtc.so
     sudo ldconfig
+    # RenderDoc is unpacked by hand in /opt. Its Vulkan layer manifest names the build machine's path, so point it at /opt.
+    # The layer only loads when ENABLE_VULKAN_RENDERDOC_CAPTURE is set, so registering it is harmless otherwise.
+    if [ -f /opt/renderdoc_1.47/etc/vulkan/implicit_layer.d/renderdoc_capture.json ]; then
+        sudo install -d /etc/vulkan/implicit_layer.d
+        sed -E 's#"library_path" *: *"[^"]*"#"library_path": "/opt/renderdoc_1.47/lib/librenderdoc.so"#' \
+            /opt/renderdoc_1.47/etc/vulkan/implicit_layer.d/renderdoc_capture.json |
+            sudo tee /etc/vulkan/implicit_layer.d/renderdoc_capture.json >/dev/null
+    fi
 
 # Show the tools and GPUs this machine has
 doctor:
     #!/usr/bin/env bash
-    for tool in cargo cc slangc spirv-val vulkaninfo nvidia-smi; do
+    for tool in cargo cc slangc spirv-val vulkaninfo nvidia-smi renderdoccmd; do
         printf '%-12s %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
     done
     printf '%-12s %s\n' nvrtc "$(ldconfig -p | grep -m1 'libnvrtc\.so ' | sed 's/.*=> //' || true)"
+    printf '%-12s %s\n' renderdoc-layer "$(test -f /etc/vulkan/implicit_layer.d/renderdoc_capture.json && echo registered || echo MISSING)"
     vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|apiVersion' || echo "no Vulkan GPU found"
+
+# Capture one frame of examples/frame_capture in RenderDoc, then open it in qrenderdoc. Needs `just setup`
+renderdoc-example name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --example {{name}}
+    marker=$(mktemp)
+    trap 'rm -f "$marker"' EXIT
+    renderdoccmd capture -w -c "$PWD/target/renderdoc/frame" target/debug/examples/{{name}}
+    capture=$(find target/renderdoc -name '*.rdc' -newer "$marker" -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+    if [ -z "$capture" ]; then
+        echo "RenderDoc saved no capture" >&2
+        exit 1
+    fi
+    echo "$PWD/$capture"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        qrenderdoc "$PWD/$capture" >/dev/null 2>&1 &
+    fi
 
 # Build the library
 build:
@@ -65,9 +92,19 @@ test-nvidia:
 
 # Rebuild the Slang kernels and list what was generated
 kernels:
-    touch build.rs
+    #!/usr/bin/env bash
+    set -euo pipefail
+    marker=$(mktemp)
+    trap 'rm -f "$marker"' EXIT
+    # touching build.rs left stale kernels, so drop cudash's build output and force the build script to run
+    cargo clean -p cudash
     cargo build
-    find target/debug/build -path '*/out/*' \( -name '*.spv' -o -name '*.ptx' \) -newer build.rs
+    kernels=$(find target/debug/build -path '*/out/*' \( -name '*.spv' -o -name '*.ptx' \) -newer "$marker")
+    if [ -z "$kernels" ]; then
+        echo "build script wrote no kernels" >&2
+        exit 1
+    fi
+    echo "$kernels"
 
 # Run an example, such as slang_spirv
 example name:

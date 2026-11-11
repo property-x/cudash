@@ -50,8 +50,13 @@ impl CudaContext {
         let bytes = len.checked_mul(size_of::<T>()).ok_or(DriverError::Vulkan(
             ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY,
         ))?;
+        let buffer = Buffer::staging(&self.device, bytes as u64)?;
+        buffer.set_name(format_args!(
+            "PinnedHostSlice<{}> len {len}",
+            std::any::type_name::<T>()
+        ));
         Ok(PinnedHostSlice {
-            buffer: Buffer::staging(&self.device, bytes as u64)?,
+            buffer,
             len,
             ctx: self.clone(),
             marker: PhantomData,
@@ -185,6 +190,7 @@ impl CudaContext {
             let bytes = std::slice::from_raw_parts(start as *const u8, end - start);
             Buffer::import_host(&self.device, bytes)
         }?;
+        buffer.set_name(format_args!("host_register {} bytes", end - start));
         registry.push(Registration {
             start,
             end,

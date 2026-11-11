@@ -8,8 +8,8 @@ use cudash::driver::{CudaContext, Spirv};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let src = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/kernels/sin_kernel.slang"
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/kernels/sin_kernel.slang"
     );
     let spv = std::env::temp_dir().join("cudash_nvrtc_compile.spv");
 

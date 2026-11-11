@@ -9,8 +9,8 @@ fn main() -> Result<(), DriverError> {
 
     // You can load a function from pre-compiled SPIR-V like so:
     let module = ctx.load_module(Spirv::from_file(concat!(
-    env!("OUT_DIR"),
-    "/sin_kernel.spv"
+        env!("OUT_DIR"),
+        "/sin_kernel.spv"
     )))?;
 
     // and then load a function from it:

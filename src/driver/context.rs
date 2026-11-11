@@ -40,7 +40,7 @@ impl CudaContext {
     /// Requires Vulkan 1.3.
     pub fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
         let device = Device::new(ordinal)?;
-        let default_core = StreamCore::new(&device, None)?;
+        let default_core = StreamCore::new(&device, None, "default_stream")?;
         Ok(Arc::new(Self {
             device,
             default_core,
@@ -77,7 +77,10 @@ impl CudaContext {
 
     /// A new, independent stream.
     pub fn new_stream(self: &Arc<Self>) -> Result<Arc<CudaStream>, DriverError> {
-        Ok(CudaStream::new(self, StreamCore::new(&self.device, None)?))
+        Ok(CudaStream::new(
+            self,
+            StreamCore::new(&self.device, None, "new_stream")?,
+        ))
     }
 
     /// Blocks until all work on this GPU has finished.
@@ -90,6 +93,16 @@ impl CudaContext {
     /// The Vulkan instance, for use alongside cudash, such as rendering results.
     pub fn vk_instance(&self) -> &ash::Instance {
         &self.device.instance
+    }
+
+    /// What RenderDoc calls this context's device for Vulkan: the instance's dispatch table
+    /// pointer (`RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE`). Pass it to
+    /// [`RenderDoc::start`](crate::debug::RenderDoc::start) and `end`.
+    pub fn renderdoc_device_pointer(&self) -> *mut std::ffi::c_void {
+        let instance =
+            vk::Handle::as_raw(self.vk_instance().handle()) as *const *mut std::ffi::c_void;
+        // SAFETY: a dispatchable Vulkan handle points at its dispatch table pointer.
+        unsafe { *instance }
     }
 
     /// The Vulkan physical device behind this context.
