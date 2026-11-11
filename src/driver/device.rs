@@ -2,6 +2,7 @@
 
 use std::{
     ffi::CStr,
+    ops::Deref,
     ptr::NonNull,
     sync::{Arc, Mutex},
 };
@@ -15,7 +16,15 @@ use super::{DriverError, stream::Tracking};
 // constants, and `launch` returns an error above the device's limit.
 const API_VERSION: u32 = vk::API_VERSION_1_3;
 
-pub(crate) struct Device {
+/// A context's Vulkan device. Dropping it parks the device in [`IDLE`] for the next context on
+/// its GPU instead of destroying it.
+pub(crate) struct Device(Option<DeviceState>);
+
+/// Devices whose contexts were dropped, which have no Vulkan objects left. On NVIDIA,
+/// `vkDestroyDevice` deadlocks if another thread that used Vulkan exits meanwhile.
+static IDLE: Mutex<Vec<DeviceState>> = Mutex::new(Vec::new());
+
+pub(crate) struct DeviceState {
     /// A handle to the process-wide instance from [`instance`], which is never destroyed.
     pub(crate) instance: ash::Instance,
     pub(crate) physical_device: vk::PhysicalDevice,
@@ -93,7 +102,7 @@ fn enumerate() -> Result<(&'static ash::Instance, Vec<vk::PhysicalDevice>), Driv
             let properties = instance.get_physical_device_properties(pd);
             properties.api_version >= API_VERSION
                 && properties.device_type != vk::PhysicalDeviceType::CPU
-                && compute_queue_family(&instance, pd).is_some()
+                && compute_queue_family(instance, pd).is_some()
         });
         devices.sort_by_key(|&pd| {
             let kind = instance.get_physical_device_properties(pd).device_type;
@@ -145,8 +154,23 @@ impl Device {
     }
 
     pub(crate) fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
+        let parked = {
+            let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
+            let index = idle.iter().position(|state| state.ordinal == ordinal);
+            index.map(|i| idle.swap_remove(i))
+        };
+        let state = match parked {
+            Some(state) => state,
+            None => Self::create_state(ordinal)?,
+        };
+        Ok(Arc::new(Self(Some(state))))
+    }
+
+    fn create_state(ordinal: usize) -> Result<DeviceState, DriverError> {
         let (instance, devices) = enumerate()?;
-        let pd = *devices.get(ordinal).ok_or(DriverError::NoSuchDevice(ordinal))?;
+        let pd = *devices
+            .get(ordinal)
+            .ok_or(DriverError::NoSuchDevice(ordinal))?;
         let extensions = available_extensions(instance, pd);
         let (device, queue_family, physical_device) =
             unsafe { Self::create(instance, pd, &extensions) }?;
@@ -164,7 +188,7 @@ impl Device {
                 functions: ext::external_memory_host::Device::new(instance, &device),
                 alignment: import.min_imported_host_pointer_alignment,
             });
-            Ok(Arc::new(Self {
+            Ok(DeviceState {
                 queue: Mutex::new(device.get_device_queue(queue_family, 0)),
                 memory: instance.get_physical_device_memory_properties(physical_device),
                 uuid: id.device_uuid,
@@ -178,7 +202,7 @@ impl Device {
                 extensions,
                 #[cfg(feature = "cudarc")]
                 cuda: Default::default(),
-            }))
+            })
         }
     }
 
@@ -272,12 +296,19 @@ impl Device {
     }
 }
 
+impl Deref for Device {
+    type Target = DeviceState;
+
+    fn deref(&self) -> &DeviceState {
+        self.0.as_ref().expect("only taken in drop")
+    }
+}
+
 impl Drop for Device {
     fn drop(&mut self) {
-        unsafe {
-            let _ = self.device.device_wait_idle();
-            self.device.destroy_device(None);
-        }
+        let state = self.0.take().expect("only taken in drop");
+        let _ = unsafe { state.device.device_wait_idle() };
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).push(state);
     }
 }
 
