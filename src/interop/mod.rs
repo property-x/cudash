@@ -8,7 +8,7 @@
 #[cfg(not(unix))]
 compile_error!("cudash currently supports only Unix opaque fd handles");
 
-mod buffer;
+pub(crate) mod buffer;
 mod semaphore;
 mod vulkan;
 
@@ -226,9 +226,26 @@ fn import<T>(
     let Some(crate::driver::device::Dedicated(dedicated)) = buffer.export else {
         return Err(Error::ExportUnsupported);
     };
-    let exporter = vulkan::VulkanExporter::new(&buffer.device)?;
     // Waits for reads too, which only `as_cuda_mut` needs. Lending is rare enough.
     crate::driver::stream::wait_for_gpu(buffer)?;
-    let fd = exporter.export_memory(buffer.memory)?;
-    buffer::Imported::new(stream, fd, buffer.allocation_size, dedicated, slice.len())
+    let context_id = Arc::as_ptr(stream.context()) as usize;
+    let mut mappings = buffer
+        .cuda_mappings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mapping = if let Some(mapping) = mappings.get(&context_id) {
+        mapping.clone()
+    } else {
+        let exporter = vulkan::VulkanExporter::new(&buffer.device)?;
+        let fd = exporter.export_memory(buffer.memory)?;
+        let mapping = Arc::new(buffer::Mapping::new(
+            stream,
+            fd,
+            buffer.allocation_size,
+            dedicated,
+        )?);
+        mappings.insert(context_id, mapping.clone());
+        mapping
+    };
+    Ok(buffer::Imported::new(stream, mapping, slice.len()))
 }

@@ -38,48 +38,67 @@ impl<T> LentMut<'_, T> {
     }
 }
 
-/// Exported Vulkan memory imported into CUDA, as a cudarc slice.
-pub(crate) struct Imported<T> {
-    // Unmapped in Drop, because CudaSlice's own Drop may use cuMemFreeAsync, while
-    // mapped buffers must be released with cuMemFree. The import is destroyed after.
-    slice: ManuallyDrop<CudaSlice<T>>,
-    _memory: ImportedMemory,
+/// A CUDA mapping retained by the Vulkan buffer for one CUDA context.
+pub(crate) struct Mapping {
+    device_ptr: sys::CUdeviceptr,
+    memory: ImportedMemory,
 }
 
-impl<T> Imported<T> {
-    /// Imports `size` bytes of memory from `fd`, and maps its first `len` elements.
+impl Mapping {
+    /// Imports and maps the full Vulkan allocation so later lends can use any slice length.
     pub(crate) fn new(
         stream: &Arc<CudaStream>,
         fd: OwnedFd,
         size: u64,
         dedicated: bool,
-        len: usize,
     ) -> Result<Self> {
         let memory = ImportedMemory::new(stream.context(), fd, size, dedicated)?;
-        let num_bytes = (len * size_of::<T>()) as u64;
         // SAFETY: `memory` is valid, and the range fits in the allocation.
         let device_ptr =
-            unsafe { result::external_memory::get_mapped_buffer(memory.raw, 0, num_bytes) }?;
-        // SAFETY: the mapping holds `len` elements.
-        let slice = unsafe { stream.upgrade_device_ptr::<T>(device_ptr, len) };
-        Ok(Self {
+            unsafe { result::external_memory::get_mapped_buffer(memory.raw, 0, size) }?;
+        Ok(Self { device_ptr, memory })
+    }
+}
+
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        let ctx = &self.memory.ctx;
+        ctx.record_err(ctx.bind_to_thread());
+        // Every lend synchronizes before releasing its wrapper, so no CUDA work can use this
+        // mapping once the owning Vulkan buffer drops it.
+        ctx.record_err(unsafe { result::memory_free(self.device_ptr) });
+    }
+}
+
+/// A per-lend cudarc slice wrapper around a buffer-owned CUDA mapping.
+pub(crate) struct Imported<T> {
+    // The mapping is retained by the Vulkan buffer; this Arc keeps it alive for the lend too.
+    slice: ManuallyDrop<CudaSlice<T>>,
+    mapping: Arc<Mapping>,
+}
+
+impl<T> Imported<T> {
+    pub(crate) fn new(stream: &Arc<CudaStream>, mapping: Arc<Mapping>, len: usize) -> Self {
+        // SAFETY: the cached mapping covers the full Vulkan allocation and the slice borrow
+        // keeps that allocation alive for this wrapper.
+        let slice = unsafe { stream.upgrade_device_ptr::<T>(mapping.device_ptr, len) };
+        Self {
             slice: ManuallyDrop::new(slice),
-            _memory: memory,
-        })
+            mapping,
+        }
     }
 }
 
 impl<T> Drop for Imported<T> {
     fn drop(&mut self) {
-        // SAFETY: `slice` isn't used again after this.
+        // SAFETY: the temporary wrapper is no longer used and must not free the cached pointer.
         let slice = unsafe { ManuallyDrop::take(&mut self.slice) };
         let stream = slice.stream().clone();
         let ctx = stream.context();
         ctx.record_err(ctx.bind_to_thread());
-        let device_ptr = slice.leak();
+        let _ = slice.leak();
         ctx.record_err(stream.synchronize());
-        // SAFETY: the stream is idle, and `leak` made us the pointer's only owner.
-        ctx.record_err(unsafe { result::memory_free(device_ptr) });
+        let _ = &self.mapping;
     }
 }
 

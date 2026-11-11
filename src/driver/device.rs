@@ -1,5 +1,8 @@
 //! The Vulkan device behind a context, and buffers allocated from it.
 
+#[cfg(feature = "cudarc")]
+use std::collections::HashMap;
+
 use std::{
     ffi::CStr,
     ops::Deref,
@@ -402,6 +405,8 @@ pub(crate) struct Buffer {
     /// dedicated allocation, which CUDA has to be told.
     #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
     pub(crate) export: Option<Dedicated>,
+    #[cfg(feature = "cudarc")]
+    pub(crate) cuda_mappings: Mutex<HashMap<usize, Arc<crate::interop::buffer::Mapping>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -461,6 +466,8 @@ impl Buffer {
             tracking: Mutex::default(),
             allocation_size: 0,
             export: None,
+            #[cfg(feature = "cudarc")]
+            cuda_mappings: Mutex::default(),
         }
     }
 
@@ -660,6 +667,11 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
+        #[cfg(feature = "cudarc")]
+        self.cuda_mappings
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         // Submissions hold a reference until they finish, so the GPU is done here.
         unsafe {
             self.device.device.destroy_buffer(self.buffer, None);
