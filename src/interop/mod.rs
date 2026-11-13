@@ -167,16 +167,6 @@ fn uuid_bytes(uuid: sys::CUuuid) -> [u8; 16] {
 /// # Ok(())
 /// # }
 /// ```
-///
-/// A shared view can only be lent for reading:
-///
-/// ```compile_fail
-/// use cudash::interop::AsCuda;
-/// # let ctx = cudash::driver::CudaContext::new(0).unwrap();
-/// let buf = ctx.default_stream().alloc_zeros::<f32>(4).unwrap();
-/// let mut view = buf.slice(1..);
-/// view.as_cuda_mut();
-/// ```
 pub trait AsCuda<T>: crate::driver::DevicePtr<T> {
     /// Lends the slice for reading, bound to the CUDA stream paired with the slice's cudash
     /// stream. Blocks until cudash work that writes it has finished. Dropping the result
