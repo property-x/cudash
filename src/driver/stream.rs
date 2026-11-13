@@ -17,6 +17,7 @@ use super::{
     DriverError,
     context::CudaContext,
     device::{Buffer, Device},
+    graph::Capture,
     slice::{CudaSlice, DevicePtr, DevicePtrMut, DeviceRepr, HostSlice, RawRange, ValidAsZeroBits},
 };
 
@@ -76,34 +77,37 @@ pub(crate) type Keep = Arc<dyn Any + Send + Sync>;
 
 struct Pending {
     value: u64,
-    command_buffer: vk::CommandBuffer,
+    /// A command buffer from the stream's pool, reused once this finishes. Graphs own theirs.
+    command_buffer: Option<vk::CommandBuffer>,
     _keep: Vec<Keep>,
 }
 
-struct State {
+pub(crate) struct State {
     last_value: u64,
     /// What the next submission waits for. Starts on the source stream if forked.
-    last: Option<Point>,
+    pub(crate) last: Option<Point>,
     frame_id: Option<u64>,
     pending: VecDeque<Pending>,
     available: Vec<vk::CommandBuffer>,
+    /// Set between `begin_capture` and `end_capture`.
+    pub(crate) capture: Option<Capture>,
 }
 
 static NEXT_FRAME_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The part of a stream that's shared by every handle to it.
 pub(crate) struct StreamCore {
-    device: Arc<Device>,
+    pub(crate) device: Arc<Device>,
     timeline: Arc<Timeline>,
     pool: vk::CommandPool,
-    state: Mutex<State>,
+    pub(crate) state: Mutex<State>,
     /// The staging buffer `memcpy_htod_reused` used last, and its size.
     reusable: Mutex<Option<(Arc<Buffer>, u64)>>,
     /// Staging buffers `memcpy_htod` reuses, and their sizes. One is free once this holds
     /// the only reference, because finished submissions drop theirs.
     staging: Mutex<Vec<(Arc<Buffer>, u64)>>,
     /// What tools such as RenderDoc call this stream, such as `new_stream 3`.
-    name: String,
+    pub(crate) name: String,
     /// The CUDA stream paired with this one, created by `interop` on first use.
     #[cfg(feature = "cudarc")]
     pub(crate) cuda: crate::interop::StreamSlot,
@@ -152,6 +156,7 @@ impl StreamCore {
                     frame_id: None,
                     pending: VecDeque::new(),
                     available: Vec::new(),
+                    capture: None,
                 }),
                 reusable: Mutex::new(None),
                 staging: Mutex::new(Vec::new()),
@@ -161,15 +166,18 @@ impl StreamCore {
         }
     }
 
-    fn reclaim(&self, state: &mut State) -> Result<(), DriverError> {
+    pub(crate) fn reclaim(&self, state: &mut State) -> Result<(), DriverError> {
         let device = &self.device.device;
         let done = unsafe { device.get_semaphore_counter_value(self.timeline.semaphore) }?;
         while state.pending.front().is_some_and(|p| p.value <= done) {
             let finished = state.pending.pop_front().expect("checked by the loop");
+            let Some(command_buffer) = finished.command_buffer else {
+                continue;
+            };
             if state.available.len() < COMMAND_BUFFERS_KEPT {
-                state.available.push(finished.command_buffer);
+                state.available.push(command_buffer);
             } else {
-                unsafe { device.free_command_buffers(self.pool, &[finished.command_buffer]) };
+                unsafe { device.free_command_buffers(self.pool, &[command_buffer]) };
             }
         }
         Ok(())
@@ -180,6 +188,7 @@ impl StreamCore {
     }
 
     fn synchronize(&self) -> Result<(), DriverError> {
+        self.refuse_while_capturing("synchronize")?;
         if let Some(point) = self.last_point() {
             point.wait()?;
         }
@@ -245,40 +254,37 @@ impl StreamCore {
             .map(drop)
     }
 
-    /// [`Self::submit`], returning the point the submission signals.
+    /// Invalidates an active capture and returns an error, as CUDA does for calls it can't
+    /// capture. Does nothing when the stream isn't capturing.
+    pub(crate) fn refuse_while_capturing(&self, op: &str) -> Result<(), DriverError> {
+        match &mut self.state.lock().unwrap().capture {
+            Some(capture) => Err(capture.invalidate(op)),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn is_capturing(&self) -> bool {
+        self.state.lock().unwrap().capture.is_some()
+    }
+
+    /// [`Self::submit`], returning the point the submission signals, or `None` if the stream
+    /// is capturing and the work was recorded instead.
     fn submit_at(
         &self,
         label: fmt::Arguments<'_>,
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
-        mut keep: Vec<Keep>,
+        keep: Vec<Keep>,
         frame_end: bool,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
-    ) -> Result<Point, DriverError> {
+    ) -> Result<Option<Point>, DriverError> {
         let device = &self.device.device;
         let mut state = self.state.lock().unwrap();
         self.reclaim(&mut state)?;
-        let frame_id = state.frame_id;
-        if frame_end && frame_id.is_none() {
-            return Err(DriverError::NoActiveFrame);
+        if let Some(capture) = &mut state.capture {
+            capture.record(self, label, reads, writes, keep, record)?;
+            return Ok(None);
         }
-
-        let waits = required_waits(state.last.as_ref(), reads, writes);
-        let wait_infos: Vec<_> = waits
-            .iter()
-            .map(|point| {
-                vk::SemaphoreSubmitInfo::default()
-                    .semaphore(point.timeline.semaphore)
-                    .value(point.value)
-                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            })
-            .collect();
-
-        let value = state.last_value + 1;
-        let signal_infos = [vk::SemaphoreSubmitInfo::default()
-            .semaphore(self.timeline.semaphore)
-            .value(value)
-            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
 
         // shortcut: one queue submission per operation, batch them if this shows up in
         // profiles. Timeline waits give every operation a full memory dependency on what
@@ -300,49 +306,108 @@ impl StreamCore {
                 device.allocate_command_buffers(&allocate)?[0]
             },
         };
-        let submitted = unsafe {
-            let begin = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            device
-                .begin_command_buffer(command_buffer, &begin)
-                .and_then(|()| {
-                    let utils = self.device.debug_utils.as_ref();
-                    if let Some(utils) = utils {
-                        // A NULL inside the label would only come from a kernel name.
-                        let name = CString::new(label.to_string()).unwrap_or_default();
-                        let info = vk::DebugUtilsLabelEXT::default().label_name(&name);
-                        utils.cmd_begin_debug_utils_label(command_buffer, &info);
-                        let stream = &self.name;
-                        let label = name.to_string_lossy();
-                        self.device
-                            .set_name(command_buffer, format_args!("{stream}: {label}"));
-                    }
-                    record(device, command_buffer);
-                    if let Some(utils) = utils {
-                        utils.cmd_end_debug_utils_label(command_buffer);
-                    }
-                    device.end_command_buffer(command_buffer)?;
-                    let command_buffers =
-                        [vk::CommandBufferSubmitInfo::default().command_buffer(command_buffer)];
-                    let mut frame_boundary =
-                        vk::FrameBoundaryEXT::default().frame_id(frame_id.unwrap_or_default());
-                    if frame_end {
-                        frame_boundary = frame_boundary.flags(vk::FrameBoundaryFlagsEXT::FRAME_END);
-                    }
-                    let mut submit = vk::SubmitInfo2::default()
-                        .wait_semaphore_infos(&wait_infos)
-                        .signal_semaphore_infos(&signal_infos)
-                        .command_buffer_infos(&command_buffers);
-                    if frame_id.is_some() {
-                        submit = submit.push_next(&mut frame_boundary);
-                    }
-                    let queue = self.device.queue.lock().unwrap();
-                    device.queue_submit2(*queue, &[submit], vk::Fence::null())
-                })
-        };
-        if let Err(e) = submitted {
+        let begin = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let submitted = unsafe { device.begin_command_buffer(command_buffer, &begin) }
+            .map_err(DriverError::from)
+            .and_then(|()| {
+                self.record_labeled(command_buffer, label, record);
+                unsafe { device.end_command_buffer(command_buffer) }?;
+                let waits = required_waits(state.last.as_ref(), reads, writes);
+                self.queue(
+                    &mut state,
+                    Some(command_buffer),
+                    true,
+                    &waits,
+                    &[],
+                    &[],
+                    (reads, writes),
+                    keep,
+                    frame_end,
+                )
+            });
+        if submitted.is_err() {
             unsafe { device.free_command_buffers(self.pool, &[command_buffer]) };
-            return Err(e.into());
+        }
+        submitted.map(Some)
+    }
+
+    /// Records `record` into `command_buffer`, inside a debug label named `label`.
+    pub(crate) fn record_labeled(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        label: fmt::Arguments<'_>,
+        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+    ) {
+        let utils = self.device.debug_utils.as_ref();
+        if let Some(utils) = utils {
+            // A NULL inside the label would only come from a kernel name.
+            let name = CString::new(label.to_string()).unwrap_or_default();
+            let info = vk::DebugUtilsLabelEXT::default().label_name(&name);
+            unsafe { utils.cmd_begin_debug_utils_label(command_buffer, &info) };
+            let stream = &self.name;
+            let label = name.to_string_lossy();
+            self.device
+                .set_name(command_buffer, format_args!("{stream}: {label}"));
+        }
+        record(&self.device.device, command_buffer);
+        if let Some(utils) = utils {
+            unsafe { utils.cmd_end_debug_utils_label(command_buffer) };
+        }
+    }
+
+    /// Submits `command_buffer`, which may be `None` for a submission that only orders work,
+    /// after `waits` and `extra_waits`, and signals the stream's next value and `extra_signals`.
+    /// Then records `tracked` as used by it, keeps `keep` and `tracked` alive until it's done,
+    /// and reuses the command buffer afterwards if `reuse`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn queue(
+        &self,
+        state: &mut State,
+        command_buffer: Option<vk::CommandBuffer>,
+        reuse: bool,
+        waits: &[Point],
+        extra_waits: &[vk::SemaphoreSubmitInfo<'_>],
+        extra_signals: &[vk::SemaphoreSubmitInfo<'_>],
+        (reads, writes): (&[&Arc<Buffer>], &[&Arc<Buffer>]),
+        mut keep: Vec<Keep>,
+        frame_end: bool,
+    ) -> Result<Point, DriverError> {
+        let frame_id = state.frame_id;
+        if frame_end && frame_id.is_none() {
+            return Err(DriverError::NoActiveFrame);
+        }
+        let mut wait_infos: Vec<_> = waits
+            .iter()
+            .map(|point| semaphore_info(point.timeline.semaphore, point.value))
+            .collect();
+        wait_infos.extend_from_slice(extra_waits);
+        let value = state.last_value + 1;
+        let mut signal_infos = vec![semaphore_info(self.timeline.semaphore, value)];
+        signal_infos.extend_from_slice(extra_signals);
+        let command_buffers: Vec<_> = command_buffer
+            .iter()
+            .map(|&c| vk::CommandBufferSubmitInfo::default().command_buffer(c))
+            .collect();
+        let mut frame_boundary =
+            vk::FrameBoundaryEXT::default().frame_id(frame_id.unwrap_or_default());
+        if frame_end {
+            frame_boundary = frame_boundary.flags(vk::FrameBoundaryFlagsEXT::FRAME_END);
+        }
+        let mut submit = vk::SubmitInfo2::default()
+            .wait_semaphore_infos(&wait_infos)
+            .signal_semaphore_infos(&signal_infos)
+            .command_buffer_infos(&command_buffers);
+        if frame_id.is_some() {
+            submit = submit.push_next(&mut frame_boundary);
+        }
+        {
+            let queue = self.device.queue.lock().unwrap();
+            unsafe {
+                self.device
+                    .device
+                    .queue_submit2(*queue, &[submit], vk::Fence::null())
+            }?;
         }
 
         let point = Point {
@@ -370,13 +435,14 @@ impl StreamCore {
         }
         state.pending.push_back(Pending {
             value,
-            command_buffer,
+            command_buffer: command_buffer.filter(|_| reuse),
             _keep: keep,
         });
         Ok(point)
     }
 
     fn frame(&self) -> Result<u64, DriverError> {
+        self.refuse_while_capturing("frame")?;
         if !self.device.frame_boundary {
             return Err(DriverError::MissingFeature("VK_EXT_frame_boundary"));
         }
@@ -390,6 +456,7 @@ impl StreamCore {
     }
 
     fn stop_frame(&self) -> Result<(), DriverError> {
+        self.refuse_while_capturing("stop_frame")?;
         self.submit_at(
             format_args!("frame boundary"),
             &[],
@@ -450,6 +517,16 @@ impl fmt::Display for Bytes {
     }
 }
 
+pub(crate) fn semaphore_info(
+    semaphore: vk::Semaphore,
+    value: u64,
+) -> vk::SemaphoreSubmitInfo<'static> {
+    vk::SemaphoreSubmitInfo::default()
+        .semaphore(semaphore)
+        .value(value)
+        .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+}
+
 fn record_read(buffer: &Buffer, point: &Point) {
     let mut tracking = buffer.tracking.lock().unwrap();
     tracking
@@ -460,7 +537,7 @@ fn record_read(buffer: &Buffer, point: &Point) {
 
 /// What an operation must wait for: the previous work on its stream, the last write to
 /// everything it touches, and earlier reads of everything it writes.
-fn required_waits(
+pub(crate) fn required_waits(
     last: Option<&Point>,
     reads: &[&Arc<Buffer>],
     writes: &[&Arc<Buffer>],
@@ -636,7 +713,7 @@ impl CudaStream {
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
         keep: Vec<Keep>,
-    ) -> Result<Point, DriverError> {
+    ) -> Result<Option<Point>, DriverError> {
         let region = vk::BufferCopy::default()
             .src_offset(from.offset)
             .dst_offset(to.offset)
@@ -671,12 +748,15 @@ impl CudaStream {
             .map(drop)
     }
 
-    /// Copies `data` into `to` through one of the stream's reused staging buffers.
+    /// Copies `data` into `to` through one of the stream's reused staging buffers, or while
+    /// capturing, through a new one that the graph keeps.
     fn copy_staged(&self, op: &str, data: &[u8], to: RawRange<'_>) -> Result<(), DriverError> {
         let (staging, size) = self.core.take_staging(data.len() as u64)?;
         // SAFETY: nothing else holds `staging`, so the GPU isn't using it.
         unsafe { staging.write_bytes(data) };
-        self.core.return_staging(staging.clone(), size);
+        if !self.core.is_capturing() {
+            self.core.return_staging(staging.clone(), size);
+        }
         self.copy_to_device(op, staging, 0, to, data.len() as u64)
     }
 
@@ -729,6 +809,8 @@ impl CudaStream {
                 };
                 // Not passed as a read, which would keep the import alive past
                 // `host_unregister`. The read is recorded below instead, for it to wait on.
+                self.core
+                    .refuse_while_capturing("memcpy_htod from registered memory")?;
                 let point = self.copy(
                     "memcpy_htod registered",
                     from,
@@ -738,10 +820,15 @@ impl CudaStream {
                     &[range.buffer],
                     Vec::new(),
                 )?;
-                record_read(&registration.buffer, &point);
+                if let Some(point) = point {
+                    record_read(&registration.buffer, &point);
+                }
                 return Ok(());
             }
         }
+        // CUDA can't capture copies from pageable memory either.
+        self.core
+            .refuse_while_capturing("memcpy_htod from pageable memory")?;
         // SAFETY: `T: DeviceRepr` is plain data.
         let raw = unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u8>(), bytes as usize) };
         self.copy_staged("memcpy_htod", raw, range)
@@ -761,6 +848,7 @@ impl CudaStream {
         dst: &mut Dst,
     ) -> Result<(), DriverError> {
         assert!(dst.len() >= src.len());
+        self.core.refuse_while_capturing("memcpy_htod_unstaged")?;
         let src = src.as_host_slice();
         let bytes = size_of_val(src);
         if bytes == 0 {
@@ -807,6 +895,7 @@ impl CudaStream {
         if bytes == 0 {
             return Ok(());
         }
+        self.core.refuse_while_capturing("memcpy_htod_reused")?;
         let cached = self.core.reusable.lock().unwrap().take();
         self.core.reclaim(&mut self.core.state.lock().unwrap())?;
         // Finished submissions have been reclaimed, so holding the only reference means the
@@ -856,6 +945,7 @@ impl CudaStream {
         if bytes == 0 {
             return Ok(());
         }
+        self.core.refuse_while_capturing("memcpy_dtoh")?;
         let staging = Buffer::staging(self.device(), bytes)?;
         staging.set_name(format_args!("memcpy_dtoh staging {}", Bytes(bytes)));
         let (from, to) = (

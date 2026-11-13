@@ -33,6 +33,9 @@ Hint: This is a prototype to help me learn and understand Vulkan compute from a 
 - **Streams:** `default_stream`, `new_stream`, `fork` and `synchronize`. Work runs in call order, and
   buffers used from several streams are ordered automatically.
 - **Kernels:** `load_module`, `load_function`, `launch_builder`, `arg`, `launch` and `LaunchConfig`.
+- **Graphs:** `begin_capture`, `end_capture`, `capture_status`, and `CudaGraph::launch` and `upload`.
+  Kernels, device copies, fills and pinned host copies are recorded into reusable command buffers.
+  Other host copies and `synchronize` invalidate the capture, as in CUDA.
 
 ## Current Limitations
 
@@ -131,7 +134,8 @@ With `use cudash::interop::AsCuda`, `slice.as_cuda()` and `slice.as_cuda_mut()` 
 view to cudarc calls without copying. Each cudash stream gets its own CUDA stream on first use, and
 `as_cuda_with(&cuda_stream)` picks another one. `SharedSemaphore::new(&ctx)` creates a semaphore both
 APIs can use. `ctx.as_cuda()` gives the matching CUDA context, and `stream.as_cuda()` the paired CUDA
-stream.
+stream. cudarc work on the paired stream while the cudash stream captures becomes part of the graph, with
+CUDA's own capture.
 
 ## Building and testing
 
