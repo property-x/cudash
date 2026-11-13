@@ -75,6 +75,8 @@ pub(crate) struct Imported<T> {
     // The mapping is retained by the Vulkan buffer; this Arc keeps it alive for the lend too.
     slice: ManuallyDrop<CudaSlice<T>>,
     mapping: Arc<Mapping>,
+    /// Whether the stream was capturing when the lend began.
+    lent_in_capture: bool,
 }
 
 impl<T> Imported<T> {
@@ -90,6 +92,7 @@ impl<T> Imported<T> {
         Self {
             slice: ManuallyDrop::new(slice),
             mapping,
+            lent_in_capture: capturing(stream),
         }
     }
 }
@@ -101,10 +104,29 @@ impl<T> Drop for Imported<T> {
         let stream = slice.stream().clone();
         let ctx = stream.context();
         ctx.record_err(ctx.bind_to_thread());
-        let _ = slice.leak();
-        ctx.record_err(stream.synchronize());
+        let capturing = capturing(&stream);
+        if capturing && !self.lent_in_capture {
+            // `leak` would wait on events recorded before the capture, which invalidates it.
+            // `begin_capture` drained the stream, so the waits aren't needed.
+            // shortcut: leaks the slice's two events and a stream reference. Fine while
+            // lends that span a `begin_capture` are rare.
+            std::mem::forget(slice);
+        } else {
+            let _ = slice.leak();
+        }
+        // A capturing stream can't synchronize. The graph keeps the buffer instead.
+        if !capturing {
+            ctx.record_err(stream.synchronize());
+        }
         let _ = &self.mapping;
     }
+}
+
+fn capturing(stream: &CudaStream) -> bool {
+    !matches!(
+        stream.capture_status(),
+        Ok(sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE)
+    )
 }
 
 // These let the types go anywhere cudarc accepts a CudaSlice. There's no DerefMut, since
