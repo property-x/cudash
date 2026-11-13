@@ -216,7 +216,7 @@ impl ImportedMemory {
 impl Drop for ImportedMemory {
     fn drop(&mut self) {
         self.ctx.record_err(self.ctx.bind_to_thread());
-        // SAFETY: the mapping is freed in Imported::drop, before this runs.
+        // SAFETY: the mapping is freed in Mapping::drop, before its fields drop.
         self.ctx
             .record_err(unsafe { result::external_memory::destroy_external_memory(self.raw) });
     }

@@ -685,7 +685,7 @@ mod tests {
     use super::*;
 
     /// With the `cudarc` feature, device memory is exportable wherever the driver can export
-    /// it, so `interop::lend` works. Staging memory never is.
+    /// it, so `AsCuda` can lend it. Staging memory never is.
     #[test]
     fn device_memory_is_exportable_with_the_export_extensions() {
         let device = Device::new(0).unwrap();

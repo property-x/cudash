@@ -1,6 +1,6 @@
 //! Zero-copy data exchange between CUDA ([`cudarc`]) and Vulkan ([`ash`]).
 //!
-//! [`AsCuda`] lends ordinary cudash slices and views to real cudarc calls. Vulkan exports the memory,
+//! [`AsCuda`](crate::interop::AsCuda) lends ordinary cudash slices and views to real cudarc calls. Vulkan exports the memory,
 //! CUDA imports it, and both see the same bytes. Each cudash stream is paired with its own
 //! CUDA stream, created on first use. A [`SharedSemaphore`](crate::interop::SharedSemaphore)
 //! orders work between them by hand. Linux (opaque fd handles) only for now.
@@ -213,8 +213,8 @@ pub trait AsCuda<T>: crate::driver::DevicePtr<T> {
 /// Slices and views. Views lend only their own range of the allocation.
 impl<T, S: crate::driver::DevicePtr<T> + ?Sized> AsCuda<T> for S {}
 
-// shortcut: exports and imports the memory on every lend. Cache the import per buffer if
-// measurements show the cost matters.
+// The first lend of a buffer to a CUDA context exports and imports the whole allocation; the
+// buffer keeps that mapping, so later lends only wait and wrap it.
 // shortcut: no queue family ownership transfer to and from VK_QUEUE_FAMILY_EXTERNAL,
 // which the spec asks for; buffers have no layout, and NVIDIA's samples skip it too.
 fn import<T>(

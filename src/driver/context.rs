@@ -97,7 +97,8 @@ impl CudaContext {
 
     /// What RenderDoc calls this context's device for Vulkan: the instance's dispatch table
     /// pointer (`RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE`). Pass it to
-    /// [`RenderDoc::start`](crate::debug::RenderDoc::start) and `end`.
+    /// the `renderdoc` crate's `start_frame_capture` and `end_frame_capture`, as
+    /// `examples/frame_capture.rs` does.
     pub fn renderdoc_device_pointer(&self) -> *mut std::ffi::c_void {
         let instance =
             vk::Handle::as_raw(self.vk_instance().handle()) as *const *mut std::ffi::c_void;
