@@ -8,7 +8,7 @@
 //! Run: `cargo run --example slang_interop`
 
 use cudarc::{driver::*, nvrtc::Ptx};
-use cudash::interop::{AsCuda, cuda_context_for};
+use cudash::interop::AsCuda;
 
 const KERNEL: &str = concat!(env!("OUT_DIR"), "/kernel.ptx");
 
@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut data = cudash_stream.clone_htod(&vec![-1.0f32; len])?;
 
     // Function Definition: Cuda
-    let module = cuda_context_for(&cudash_ctx)?.load_module(Ptx::from_file(KERNEL))?;
+    let module = cudash_ctx.as_cuda()?.load_module(Ptx::from_file(KERNEL))?;
     let f = module.load_function("computeMain")?;
     let n = (len / 2) as i32; // the kernel writes 2i + 1 into the first half only
 

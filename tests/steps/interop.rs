@@ -25,9 +25,12 @@ fn given_other_vendor(w: &mut World) {
     w.drv = Some(ctx);
 }
 
-#[when(regex = r"^I call cuda_context_for on it$")]
-fn when_cuda_context_for(w: &mut World) {
-    let outcome = interop::cuda_context_for(w.ctx()).map(|_| ());
+#[when(regex = r"^I call as_cuda on its (context|default stream)$")]
+fn when_as_cuda_on(w: &mut World, what: String) {
+    let outcome = match what.as_str() {
+        "context" => w.ctx().as_cuda().map(|_| ()),
+        _ => w.default_stream().as_cuda().map(|_| ()),
+    };
     let _ = w.record(outcome);
 }
 

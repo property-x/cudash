@@ -4,10 +4,15 @@ Feature: Using cudash interop without CUDA
   in `tests/interop_memory.rs` and `tests/interop_roundtrip.rs`, which need an NVIDIA GPU.
 
   @vulkan
-  Scenario: A Vulkan GPU from another vendor is not paired with CUDA
+  Scenario Outline: A Vulkan GPU from another vendor is not paired with CUDA
     Given a cudash context on a GPU from a vendor other than NVIDIA
-    When I call cuda_context_for on it
+    When I call as_cuda on its <what>
     Then the result is a NoMatchingCudaDevice error
+
+    Examples:
+      | what           |
+      | context        |
+      | default stream |
 
   @vulkan
   Scenario Outline: Lending without CUDA is an error, not a panic

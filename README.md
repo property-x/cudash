@@ -127,10 +127,11 @@ kernel source in the SPIR-V, so anyone with your binary can read it. Turn it off
 ## Using it with cudarc
 
 The `cudarc` feature adds `cudash::interop`, for sharing memory with real CUDA on NVIDIA hardware.
-With `use cudash::interop::AsCuda`, `slice.as_cuda()` and `slice.as_cuda_mut()` lend a cudash slice to
-cudarc calls without copying. Each cudash stream gets its own CUDA stream on first use, and
+With `use cudash::interop::AsCuda`, `slice.as_cuda()` and `slice.as_cuda_mut()` lend a cudash slice or
+view to cudarc calls without copying. Each cudash stream gets its own CUDA stream on first use, and
 `as_cuda_with(&cuda_stream)` picks another one. `SharedSemaphore::new(&ctx)` creates a semaphore both
-APIs can use, and `cuda_context_for(&ctx)` gives the matching CUDA context.
+APIs can use. `ctx.as_cuda()` gives the matching CUDA context, and `stream.as_cuda()` the paired CUDA
+stream.
 
 ## Building and testing
 

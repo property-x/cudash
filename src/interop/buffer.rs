@@ -15,7 +15,7 @@ use cudarc::driver::{
 
 use crate::interop::Result;
 
-/// A cudash slice lent to cudarc for reading, from
+/// A cudash slice or view lent to cudarc for reading, from
 /// [`AsCuda::as_cuda`](crate::interop::AsCuda::as_cuda). It goes wherever cudarc takes a
 /// `&CudaSlice`. Dropping it waits for the CUDA stream it's bound to.
 pub struct Lent<'l, T> {
@@ -23,7 +23,7 @@ pub struct Lent<'l, T> {
     pub(crate) _slice: PhantomData<&'l crate::driver::CudaSlice<T>>,
 }
 
-/// A cudash slice lent to cudarc for writing, from
+/// A cudash slice or view lent to cudarc for writing, from
 /// [`AsCuda::as_cuda_mut`](crate::interop::AsCuda::as_cuda_mut). It goes wherever cudarc
 /// takes a `&mut CudaSlice` too. Dropping it waits for the CUDA stream it's bound to.
 pub struct LentMut<'l, T> {
@@ -78,10 +78,15 @@ pub(crate) struct Imported<T> {
 }
 
 impl<T> Imported<T> {
-    pub(crate) fn new(stream: &Arc<CudaStream>, mapping: Arc<Mapping>, len: usize) -> Self {
-        // SAFETY: the cached mapping covers the full Vulkan allocation and the slice borrow
-        // keeps that allocation alive for this wrapper.
-        let slice = unsafe { stream.upgrade_device_ptr::<T>(mapping.device_ptr, len) };
+    pub(crate) fn new(
+        stream: &Arc<CudaStream>,
+        mapping: Arc<Mapping>,
+        offset: u64,
+        len: usize,
+    ) -> Self {
+        // SAFETY: the cached mapping covers the full Vulkan allocation, `offset` and `len`
+        // are a range of it, and the slice borrow keeps that allocation alive.
+        let slice = unsafe { stream.upgrade_device_ptr::<T>(mapping.device_ptr + offset, len) };
         Self {
             slice: ManuallyDrop::new(slice),
             mapping,

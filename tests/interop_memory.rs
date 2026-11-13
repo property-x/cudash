@@ -63,7 +63,7 @@ fn lending_on_a_stream_of_a_second_cudash_context_works() -> cudash::interop::Re
     };
     let other = CudaContext::new(0)?;
     let mut buf = other.default_stream().clone_htod(&[1u32, 2, 3, 4])?;
-    let cuda = cudash::interop::cuda_context_for(&other)?.new_stream()?;
+    let cuda = other.as_cuda()?.new_stream()?;
     assert_eq!(cuda.clone_dtoh(&buf.as_cuda_with(&cuda)?)?, [1, 2, 3, 4]);
     assert_eq!(
         cuda.clone_dtoh(&buf.as_cuda_mut_with(&cuda)?)?,
@@ -204,5 +204,50 @@ fn lend_and_drop_many_times() -> cudash::interop::Result<()> {
         .collect::<Result<_, _>>()?;
     let last = lent.last().expect("16 slices were lent");
     assert_eq!(last.stream().clone_dtoh(last)?, vec![3u8; 64 * 1024]);
+    Ok(())
+}
+
+/// A lend of a sub-range view points at the view's offset: cudarc writes only that range.
+#[test]
+fn lending_a_mutable_sub_range_writes_only_that_range() -> cudash::interop::Result<()> {
+    let Some(gpu) = nvidia() else {
+        return Ok(());
+    };
+    let mut buf = gpu.stream.clone_htod(&[0u32; 8])?;
+    {
+        let mut view = buf.slice_mut(2..5);
+        let mut lent = view.as_cuda_mut()?;
+        let cuda = lent.stream().clone();
+        assert_eq!(lent.len(), 3);
+        cuda.memcpy_htod(&[7u32, 8, 9], &mut lent)?;
+    }
+    assert_eq!(gpu.stream.clone_dtoh(&buf)?, [0, 0, 7, 8, 9, 0, 0, 0]);
+    Ok(())
+}
+
+/// Reading through a lent `CudaView` sees the view's range, not the start of the buffer.
+#[test]
+fn lending_a_sub_range_view_reads_only_that_range() -> cudash::interop::Result<()> {
+    let Some(gpu) = nvidia() else {
+        return Ok(());
+    };
+    let buf = gpu.stream.clone_htod(&[0u32, 1, 2, 3, 4, 5, 6, 7])?;
+    let view = buf.slice(3..6);
+    let lent = view.as_cuda()?;
+    assert_eq!(lent.stream().clone_dtoh(&lent)?, [3, 4, 5]);
+    Ok(())
+}
+
+/// `stream.as_cuda()` is cached and is the stream lends use.
+#[test]
+fn stream_as_cuda_is_cached_and_is_the_lends_stream() -> cudash::interop::Result<()> {
+    let Some(gpu) = nvidia() else {
+        return Ok(());
+    };
+    let (a, b) = (gpu.stream.as_cuda()?, gpu.stream.as_cuda()?);
+    assert!(Arc::ptr_eq(&a, &b));
+    let buf = gpu.stream.alloc_zeros::<u32>(4)?;
+    assert!(Arc::ptr_eq(buf.as_cuda()?.stream(), &a));
+    assert!(!Arc::ptr_eq(&a, &gpu.stream.fork()?.as_cuda()?));
     Ok(())
 }

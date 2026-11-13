@@ -1,6 +1,6 @@
 //! Zero-copy data exchange between CUDA ([`cudarc`]) and Vulkan ([`ash`]).
 //!
-//! [`AsCuda`] lends ordinary cudash slices to real cudarc calls. Vulkan exports the memory,
+//! [`AsCuda`] lends ordinary cudash slices and views to real cudarc calls. Vulkan exports the memory,
 //! CUDA imports it, and both see the same bytes. Each cudash stream is paired with its own
 //! CUDA stream, created on first use. A [`SharedSemaphore`](crate::interop::SharedSemaphore)
 //! orders work between them by hand. Linux (opaque fd handles) only for now.
@@ -105,13 +105,28 @@ fn cached<T>(
     Ok(value)
 }
 
-/// The CUDA context on the same GPU as a cudash context. It's created on the first call
-/// and then shared by everything in this module.
-///
-/// Returns [`Error::NoMatchingCudaDevice`] on non-NVIDIA devices without touching CUDA,
-/// so it's safe to call on machines that have no CUDA installed.
-pub fn cuda_context_for(ctx: &crate::driver::CudaContext) -> Result<Arc<CudaContext>> {
-    cuda_context(&ctx.device)
+impl crate::driver::CudaContext {
+    /// The CUDA context on the same GPU. It's created on the first call and then shared by
+    /// everything in this module.
+    ///
+    /// Returns [`Error::NoMatchingCudaDevice`] on non-NVIDIA devices without touching CUDA,
+    /// so it's safe to call on machines that have no CUDA installed.
+    pub fn as_cuda(&self) -> Result<Arc<CudaContext>> {
+        cuda_context(&self.device)
+    }
+}
+
+impl crate::driver::CudaStream {
+    /// The CUDA stream paired with this one: a fresh one, never the legacy null stream, which
+    /// would serialize unrelated CUDA work. It's created on the first call.
+    ///
+    /// This only hands out the stream. It doesn't order its work against cudash work; lending
+    /// a slice with [`AsCuda`] or a [`SharedSemaphore`] does that.
+    pub fn as_cuda(&self) -> Result<Arc<CudaStream>> {
+        cached(&self.core.cuda, || {
+            Ok(self.context().as_cuda()?.new_stream()?)
+        })
+    }
 }
 
 fn cuda_context(device: &crate::driver::device::Device) -> Result<Arc<CudaContext>> {
@@ -134,7 +149,7 @@ fn uuid_bytes(uuid: sys::CUuuid) -> [u8; 16] {
     uuid.bytes.map(|b| b as u8)
 }
 
-/// Lends a cudash slice to cudarc calls, without copying.
+/// Lends a cudash slice or view to cudarc calls, without copying.
 ///
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -152,7 +167,17 @@ fn uuid_bytes(uuid: sys::CUuuid) -> [u8; 16] {
 /// # Ok(())
 /// # }
 /// ```
-pub trait AsCuda<T> {
+///
+/// A shared view can only be lent for reading:
+///
+/// ```compile_fail
+/// use cudash::interop::AsCuda;
+/// # let ctx = cudash::driver::CudaContext::new(0).unwrap();
+/// let buf = ctx.default_stream().alloc_zeros::<f32>(4).unwrap();
+/// let mut view = buf.slice(1..);
+/// view.as_cuda_mut();
+/// ```
+pub trait AsCuda<T>: crate::driver::DevicePtr<T> {
     /// Lends the slice for reading, bound to the CUDA stream paired with the slice's cudash
     /// stream. Blocks until cudash work that writes it has finished. Dropping the result
     /// blocks until that CUDA stream has finished, and the borrow keeps cudash from writing
@@ -160,30 +185,22 @@ pub trait AsCuda<T> {
     ///
     /// Returns [`Error::NoMatchingCudaDevice`] without CUDA, [`Error::ExportUnsupported`] if
     /// the slice's memory isn't exportable, and [`Error::InvalidLength`] if it's empty.
-    fn as_cuda(&self) -> Result<Lent<'_, T>>;
+    fn as_cuda(&self) -> Result<Lent<'_, T>> {
+        self.as_cuda_with(&self.stream().as_cuda()?)
+    }
 
     /// [`Self::as_cuda`] for writing as well. Blocks until all cudash work using the slice
     /// has finished, and the borrow keeps cudash from using it until the result is dropped.
-    fn as_cuda_mut(&mut self) -> Result<LentMut<'_, T>>;
-
-    /// [`Self::as_cuda`] bound to `stream` instead. Returns [`Error::DeviceMismatch`] if
-    /// `stream` is on another GPU.
-    fn as_cuda_with(&self, stream: &Arc<CudaStream>) -> Result<Lent<'_, T>>;
-
-    /// [`Self::as_cuda_mut`] bound to `stream` instead.
-    fn as_cuda_mut_with(&mut self, stream: &Arc<CudaStream>) -> Result<LentMut<'_, T>>;
-}
-
-impl<T> AsCuda<T> for crate::driver::CudaSlice<T> {
-    fn as_cuda(&self) -> Result<Lent<'_, T>> {
-        self.as_cuda_with(&paired_stream(self)?)
-    }
-
-    fn as_cuda_mut(&mut self) -> Result<LentMut<'_, T>> {
-        let stream = paired_stream(self)?;
+    fn as_cuda_mut(&mut self) -> Result<LentMut<'_, T>>
+    where
+        Self: crate::driver::DevicePtrMut<T>,
+    {
+        let stream = self.stream().as_cuda()?;
         self.as_cuda_mut_with(&stream)
     }
 
+    /// [`Self::as_cuda`] bound to `stream` instead. Returns [`Error::DeviceMismatch`] if
+    /// `stream` is on another GPU.
     fn as_cuda_with(&self, stream: &Arc<CudaStream>) -> Result<Lent<'_, T>> {
         Ok(Lent {
             cuda: import(self, stream)?,
@@ -191,7 +208,11 @@ impl<T> AsCuda<T> for crate::driver::CudaSlice<T> {
         })
     }
 
-    fn as_cuda_mut_with(&mut self, stream: &Arc<CudaStream>) -> Result<LentMut<'_, T>> {
+    /// [`Self::as_cuda_mut`] bound to `stream` instead.
+    fn as_cuda_mut_with(&mut self, stream: &Arc<CudaStream>) -> Result<LentMut<'_, T>>
+    where
+        Self: crate::driver::DevicePtrMut<T>,
+    {
         Ok(LentMut {
             cuda: import(self, stream)?,
             _slice: std::marker::PhantomData,
@@ -199,24 +220,19 @@ impl<T> AsCuda<T> for crate::driver::CudaSlice<T> {
     }
 }
 
-/// The CUDA stream paired with the slice's cudash stream: a fresh one, never the legacy null
-/// stream, which would serialize unrelated CUDA work.
-fn paired_stream<T>(slice: &crate::driver::CudaSlice<T>) -> Result<Arc<CudaStream>> {
-    let device = &crate::driver::DevicePtr::raw(slice).buffer.device;
-    cached(&slice.stream().core.cuda, || {
-        Ok(cuda_context(device)?.new_stream()?)
-    })
-}
+/// Slices and views. Views lend only their own range of the allocation.
+impl<T, S: crate::driver::DevicePtr<T> + ?Sized> AsCuda<T> for S {}
 
 // shortcut: exports and imports the memory on every lend. Cache the import per buffer if
 // measurements show the cost matters.
 // shortcut: no queue family ownership transfer to and from VK_QUEUE_FAMILY_EXTERNAL,
 // which the spec asks for; buffers have no layout, and NVIDIA's samples skip it too.
 fn import<T>(
-    slice: &crate::driver::CudaSlice<T>,
+    slice: &(impl crate::driver::DevicePtr<T> + ?Sized),
     stream: &Arc<CudaStream>,
 ) -> Result<buffer::Imported<T>> {
-    let buffer = crate::driver::DevicePtr::raw(slice).buffer;
+    let raw = slice.raw();
+    let buffer = raw.buffer;
     if uuid_bytes(stream.context().uuid()?) != buffer.device.uuid {
         return Err(Error::DeviceMismatch);
     }
@@ -247,5 +263,10 @@ fn import<T>(
         mappings.insert(context_id, mapping.clone());
         mapping
     };
-    Ok(buffer::Imported::new(stream, mapping, slice.len()))
+    Ok(buffer::Imported::new(
+        stream,
+        mapping,
+        raw.offset,
+        slice.len(),
+    ))
 }

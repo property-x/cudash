@@ -35,7 +35,7 @@ impl SharedSemaphore {
         let exporter = VulkanExporter::new(&ctx.device)?;
         let vulkan = exporter.create_semaphore()?;
         let fd = exporter.export_semaphore(&vulkan)?;
-        let imported = ImportedSemaphore::new(&super::cuda_context_for(ctx)?, fd)?;
+        let imported = ImportedSemaphore::new(&ctx.as_cuda()?, fd)?;
         Ok(Self {
             last_reserved: AtomicU64::new(0),
             imported,

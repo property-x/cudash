@@ -5,12 +5,9 @@ use std::{fmt::Display, sync::Arc};
 
 use cudash::{
     driver,
-    interop::{
-        cuda_context_for,
-        cudarc::{
-            driver::{CudaContext, CudaFunction},
-            nvrtc::compile_ptx,
-        },
+    interop::cudarc::{
+        driver::{CudaContext, CudaFunction},
+        nvrtc::compile_ptx,
     },
 };
 
@@ -48,7 +45,7 @@ pub struct Nvidia {
 /// The NVIDIA GPU's contexts, or `None` after [`skip`]. Doesn't touch CUDA on other GPUs.
 pub fn nvidia() -> Option<Nvidia> {
     let ctx = driver::CudaContext::new(0).inspect_err(|e| skip(e)).ok()?;
-    let cuda = cuda_context_for(&ctx).inspect_err(|e| skip(e)).ok()?;
+    let cuda = ctx.as_cuda().inspect_err(|e| skip(e)).ok()?;
     let stream = ctx.default_stream();
     Some(Nvidia { ctx, stream, cuda })
 }

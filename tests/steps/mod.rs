@@ -13,10 +13,8 @@ pub use world::World;
 
 fn nvidia_present() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
-    *PRESENT.get_or_init(|| {
-        cudash::driver::CudaContext::new(0)
-            .is_ok_and(|ctx| cudash::interop::cuda_context_for(&ctx).is_ok())
-    })
+    *PRESENT
+        .get_or_init(|| cudash::driver::CudaContext::new(0).is_ok_and(|ctx| ctx.as_cuda().is_ok()))
 }
 
 /// Decides whether a scenario runs here. A skipped scenario prints why.
