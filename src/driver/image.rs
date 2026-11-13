@@ -233,6 +233,10 @@ impl ImageInner {
                 "the GPU can't sample or store to linear {format:?} images"
             ));
         }
+        // Lets the image be copied out, like images from `clone_to_image`.
+        if features.contains(vk::FormatFeatureFlags::TRANSFER_SRC) {
+            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+        }
         let limits = unsafe {
             device.instance.get_physical_device_image_format_properties(
                 device.physical_device,
@@ -264,7 +268,15 @@ impl ImageInner {
             .tiling(vk::ImageTiling::LINEAR)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::PREINITIALIZED);
+            .initial_layout(initial_layout(buffer));
+        // Exportable memory only binds images created for the same handle type.
+        let mut external = vk::ExternalMemoryImageCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+        let info = if buffer.export.is_some() {
+            info.push_next(&mut external)
+        } else {
+            info
+        };
         unsafe {
             let image = vk_device.create_image(&info, None)?;
             // Destroys what was made so far if a later step fails. `source` is set, so the
@@ -316,6 +328,18 @@ impl ImageInner {
     }
 }
 
+/// `PREINITIALIZED` keeps a linear image's contents, but images on exportable memory must
+/// start `UNDEFINED`.
+// shortcut: the spec lets a transition from UNDEFINED discard contents; linear images keep
+// them on the drivers tested so far. Revisit if `as_image` shows garbage with `cudarc` on.
+fn initial_layout(buffer: &Buffer) -> vk::ImageLayout {
+    if buffer.export.is_some() {
+        vk::ImageLayout::UNDEFINED
+    } else {
+        vk::ImageLayout::PREINITIALIZED
+    }
+}
+
 /// [`DevicePtr::as_image`].
 pub(super) fn image_over<T: ImageFormat, Src: DevicePtr<T>>(
     src: &Src,
@@ -351,7 +375,7 @@ pub(super) fn image_over<T: ImageFormat, Src: DevicePtr<T>>(
                 .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
-                .old_layout(vk::ImageLayout::PREINITIALIZED)
+                .old_layout(initial_layout(range.buffer))
                 .new_layout(vk::ImageLayout::GENERAL)
                 .image(image)
                 .subresource_range(COLOR);
