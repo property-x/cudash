@@ -106,7 +106,8 @@ fn create_instance() -> Result<Vulkan, DriverError> {
     }
 }
 
-/// Lists suitable GPUs, discrete ones first, so ordinal 0 is the one a CUDA user would expect.
+/// Lists every Vulkan 1.3 device with a compute queue, fastest kind first (discrete, integrated,
+/// virtual, other, CPU), so ordinal 0 is the one a CUDA user would expect.
 /// If portability extension is enabled, we list these devices as well, e.g. MoltenVK.
 fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError> {
     let vulkan = vulkan()?;
@@ -115,14 +116,17 @@ fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError
         let mut devices = instance.enumerate_physical_devices()?;
         devices.retain(|&pd| {
             let properties = instance.get_physical_device_properties(pd);
-            properties.api_version >= API_VERSION
-                && properties.device_type != vk::PhysicalDeviceType::CPU
-                && compute_queue_family(instance, pd).is_some()
+            properties.api_version >= API_VERSION && compute_queue_family(instance, pd).is_some()
         });
-        devices.sort_by_key(|&pd| {
-            let kind = instance.get_physical_device_properties(pd).device_type;
-            kind != vk::PhysicalDeviceType::DISCRETE_GPU
-        });
+        devices.sort_by_key(
+            |&pd| match instance.get_physical_device_properties(pd).device_type {
+                vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+                vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
+                vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
+                vk::PhysicalDeviceType::CPU => 4,
+                _ => 3,
+            },
+        );
         Ok((vulkan, devices))
     }
 }
