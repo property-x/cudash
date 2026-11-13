@@ -4,36 +4,49 @@
 default:
     @just --list --unsorted
 
-# Install everything needed to build and test. Safe to re-run
+# Install everything needed to build and test. Safe to re-run. Runs without sudo as root, as in the Containerfile
 setup:
     #!/usr/bin/env bash
     set -euo pipefail
+    sudo=sudo
+    [ "$(id -u)" -ne 0 ] || sudo=
     if ! command -v rustup >/dev/null; then
         echo "Install Rust first: https://rustup.rs" >&2
         exit 1
     fi
     rustup component add rustfmt clippy
     rustup toolchain install nightly --component rustfmt
+    # Ubuntu's mdbook is 0.4.x, and 0.5 is current. cargo skips the build when this version is already installed.
+    cargo install --locked mdbook --version 0.5.4
     # libnvrtc12 is in Ubuntu's multiverse repository, and doesn't need an NVIDIA GPU.
-    sudo apt-get update
-    sudo apt-get install -y build-essential slang-compiler libnvrtc12 mesa-vulkan-drivers \
+    $sudo apt-get update
+    $sudo apt-get install -y build-essential slang-compiler libnvrtc12 mesa-vulkan-drivers \
         vulkan-tools vulkan-validationlayers spirv-tools
     # Slang looks for the unversioned library name, which the package doesn't provide.
-    sudo ln -sf libnvrtc.so.12 /usr/lib/x86_64-linux-gnu/libnvrtc.so
-    sudo ldconfig
+    $sudo ln -sf libnvrtc.so.12 /usr/lib/x86_64-linux-gnu/libnvrtc.so
+    $sudo ldconfig
     # RenderDoc is unpacked by hand in /opt. Its Vulkan layer manifest names the build machine's path, so point it at /opt.
     # The layer only loads when ENABLE_VULKAN_RENDERDOC_CAPTURE is set, so registering it is harmless otherwise.
     if [ -f /opt/renderdoc_1.47/etc/vulkan/implicit_layer.d/renderdoc_capture.json ]; then
-        sudo install -d /etc/vulkan/implicit_layer.d
+        $sudo install -d /etc/vulkan/implicit_layer.d
         sed -E 's#"library_path" *: *"[^"]*"#"library_path": "/opt/renderdoc_1.47/lib/librenderdoc.so"#' \
             /opt/renderdoc_1.47/etc/vulkan/implicit_layer.d/renderdoc_capture.json |
-            sudo tee /etc/vulkan/implicit_layer.d/renderdoc_capture.json >/dev/null
+            $sudo tee /etc/vulkan/implicit_layer.d/renderdoc_capture.json >/dev/null
+    fi
+    # distrobox --nvidia mounts the host's NVIDIA manifest, which names Fedora's library path. Add a copy with Ubuntu's
+    # path, only when the mounted one points at a missing file and Ubuntu's library exists. Otherwise do nothing.
+    icd=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+    lib=$(sed -nE 's/.*"library_path" *: *"([^"]*)".*/\1/p' "$icd" 2>/dev/null || true)
+    ubuntu_lib=/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0
+    if [ -n "$lib" ] && [ ! -e "$lib" ] && [ -e "$ubuntu_lib" ]; then
+        $sudo install -d /etc/vulkan/icd.d
+        sed "s#\"$lib\"#\"$ubuntu_lib\"#" "$icd" | $sudo tee /etc/vulkan/icd.d/nvidia_icd.json >/dev/null
     fi
 
 # Show the tools and GPUs this machine has
 doctor:
     #!/usr/bin/env bash
-    for tool in cargo cc slangc spirv-val vulkaninfo nvidia-smi renderdoccmd; do
+    for tool in cargo cc slangc spirv-val vulkaninfo nvidia-smi renderdoccmd mdbook; do
         printf '%-12s %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
     done
     printf '%-12s %s\n' nvrtc "$(ldconfig -p | grep -m1 'libnvrtc\.so ' | sed 's/.*=> //' || true)"
@@ -168,9 +181,19 @@ lint:
     cargo +nightly fmt --check
     cargo +nightly clippy --all-targets -- -D warnings
 
-# Build the API docs and open them
+# Build the Rust API reference (cargo doc) and open it in a browser
 doc:
     cargo doc --no-deps --open
+
+# Build the mdBook guide from docs/ into target/book, and print the path to its index.html
+docs:
+    #!/usr/bin/env bash
+    mdbook build docs --dest-dir "$PWD/target/book"
+    echo "$PWD/target/book/index.html"
+
+# Serve the mdBook guide on localhost:3000 and rebuild on change
+docs-serve:
+    mdbook serve docs --dest-dir "$PWD/target/book" --open
 
 # Run all the checks that work without an NVIDIA GPU. `validate` runs the whole test suite
 ci: lint check validate

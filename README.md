@@ -23,6 +23,8 @@ Hint: This is a prototype to help me learn and understand Vulkan compute from a 
 
 **Contributions welcome!**
 
+The guide in `docs/` covers every feature in detail. Build it with `just docs`.
+
 ## What's covered
 
 - **Memory:** `alloc`, `alloc_zeros`, `clone_htod`, `clone_dtoh`, `clone_dtod`, `memcpy_htod`,
@@ -145,12 +147,15 @@ Run `just` to list every command. The main ones:
 
 | Command            | What it does                                                   |
 |--------------------|----------------------------------------------------------------|
+| `just setup`       | Installs the tools, and on an NVIDIA distrobox the Vulkan driver manifest |
 | `just doctor`      | Shows the tools and GPUs this machine has                      |
 | `just test`        | Runs the tests. `just test ptx` runs only those matching `ptx` |
 | `just validate`    | Runs the tests under Vulkan validation, and fails on any error |
 | `just lint`        | Checks formatting and clippy                                   |
 | `just ci`          | Runs everything that works without an NVIDIA GPU               |
 | `just test-nvidia` | Runs the real CUDA tests. Needs an NVIDIA GPU                  |
+| `just docs`        | Builds the guide in `docs/` into `target/book`. `just docs-serve` serves it with live reload |
+| `just doc`         | Builds the Rust API docs                                       |
 
 `build.rs` compiles the kernels in `tests/kernels` and `examples/slang` into `OUT_DIR`, as SPIR-V and
 PTX. Without NVRTC, you get a warning and no PTX. `SLANGC` and `NVRTC_PATH` override where the tools

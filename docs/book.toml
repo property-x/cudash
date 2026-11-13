@@ -1,0 +1,13 @@
+[book]
+title = "cudash"
+description = "cudarc's basic driver API on Vulkan"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../target/book"
+
+[output.html]
+# The examples need a GPU and the cudash crate, so the playground can't run them.
+[output.html.playground]
+runnable = false
