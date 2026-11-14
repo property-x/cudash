@@ -26,8 +26,8 @@ pub(crate) enum Part {
 
 /// What a stream has recorded since `begin_capture`.
 pub(crate) struct Capture {
-    device: Arc<Device>,
-    pool: vk::CommandPool,
+    /// Becomes the graph's, and owns the command pool, so dropping a capture frees it.
+    rec: Recorded,
     /// Passed on to the paired CUDA stream's capture.
     #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
     mode: sys::CUstreamCaptureMode,
@@ -35,10 +35,6 @@ pub(crate) struct Capture {
     invalid: Option<String>,
     /// The command buffer being recorded into, once something has been.
     current: Option<vk::CommandBuffer>,
-    parts: Vec<Part>,
-    reads: Vec<Arc<Buffer>>,
-    writes: Vec<Arc<Buffer>>,
-    keep: Vec<Keep>,
     /// The paired CUDA stream, once it's capturing too.
     #[cfg(feature = "cudarc")]
     pub(crate) cuda: Option<Arc<cudarc::driver::CudaStream>>,
@@ -78,12 +74,12 @@ impl Capture {
         match crate::interop::graph::end_part(self) {
             Ok(Some(part)) => {
                 self.close_vulkan()?;
-                self.parts.push(Part::Cuda(part));
+                self.rec.parts.push(Part::Cuda(part));
             }
             Ok(None) => {}
             Err(e) => return Err(self.invalidate(&format!("CUDA work ({e})"))),
         }
-        let device = &self.device.device;
+        let device = &self.rec.device.device;
         let command_buffer = match self.current {
             Some(command_buffer) => {
                 // Separate submissions get this from their timeline waits.
@@ -100,7 +96,7 @@ impl Capture {
             }
             None => unsafe {
                 let allocate = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(self.pool)
+                    .command_pool(self.rec.pool)
                     .command_buffer_count(1);
                 let command_buffer = device.allocate_command_buffers(&allocate)?[0];
                 // Replays can be queued before the last one has finished.
@@ -112,17 +108,17 @@ impl Capture {
             },
         };
         core.record_labeled(command_buffer, label, record);
-        self.reads.extend(reads.iter().map(|&b| b.clone()));
-        self.writes.extend(writes.iter().map(|&b| b.clone()));
-        self.keep.extend(keep);
+        self.rec.reads.extend(reads.iter().map(|&b| b.clone()));
+        self.rec.writes.extend(writes.iter().map(|&b| b.clone()));
+        self.rec.keep.extend(keep);
         Ok(())
     }
 
     /// Ends the command buffer being recorded, if any, as a part of its own.
     fn close_vulkan(&mut self) -> Result<(), DriverError> {
         if let Some(command_buffer) = self.current.take() {
-            unsafe { self.device.device.end_command_buffer(command_buffer) }?;
-            self.parts.push(Part::Vulkan(Some(command_buffer)));
+            unsafe { self.rec.device.device.end_command_buffer(command_buffer) }?;
+            self.rec.parts.push(Part::Vulkan(Some(command_buffer)));
         }
         Ok(())
     }
@@ -131,9 +127,9 @@ impl Capture {
     #[cfg(feature = "cudarc")]
     pub(crate) fn uses(&mut self, buffer: &Arc<Buffer>, write: bool) {
         let list = if write {
-            &mut self.writes
+            &mut self.rec.writes
         } else {
-            &mut self.reads
+            &mut self.rec.reads
         };
         list.push(buffer.clone());
     }
@@ -143,8 +139,6 @@ impl Drop for Capture {
     fn drop(&mut self) {
         #[cfg(feature = "cudarc")]
         crate::interop::graph::abandon(self);
-        // Recorded command buffers are never submitted, and go with their pool.
-        unsafe { self.device.device.destroy_command_pool(self.pool, None) };
     }
 }
 
@@ -152,19 +146,36 @@ impl Drop for Capture {
 struct Recorded {
     device: Arc<Device>,
     pool: vk::CommandPool,
-    /// Starts and ends with a Vulkan part, and CUDA parts sit between Vulkan ones.
+    /// Once the capture has ended, starts and ends with a Vulkan part, and CUDA parts sit
+    /// between Vulkan ones.
     parts: Vec<Part>,
     reads: Vec<Arc<Buffer>>,
     writes: Vec<Arc<Buffer>>,
-    _keep: Vec<Keep>,
-    /// Joins Vulkan and CUDA parts.
+    keep: Vec<Keep>,
+    /// Joins Vulkan and CUDA parts, once the graph has any.
     #[cfg(feature = "cudarc")]
     shared: Option<crate::interop::SharedSemaphore>,
 }
 
+impl Recorded {
+    fn new(device: Arc<Device>, pool: vk::CommandPool) -> Self {
+        Self {
+            device,
+            pool,
+            parts: Vec::new(),
+            reads: Vec::new(),
+            writes: Vec::new(),
+            keep: Vec::new(),
+            #[cfg(feature = "cudarc")]
+            shared: None,
+        }
+    }
+}
+
 impl Drop for Recorded {
     fn drop(&mut self) {
-        // CUDA parts go first, while their stream is still alive.
+        // CUDA parts go first, while their stream is still alive. Recorded command buffers that
+        // were never submitted go with their pool.
         self.parts.clear();
         unsafe { self.device.device.destroy_command_pool(self.pool, None) };
     }
@@ -203,15 +214,10 @@ impl CudaStream {
         core.device
             .set_name(pool, format_args!("{} capture", core.name));
         let capture = state.capture.insert(Capture {
-            device: core.device.clone(),
-            pool,
+            rec: Recorded::new(core.device.clone(), pool),
             mode,
             invalid: None,
             current: None,
-            parts: Vec::new(),
-            reads: Vec::new(),
-            writes: Vec::new(),
-            keep: Vec::new(),
             #[cfg(feature = "cudarc")]
             cuda: None,
         });
@@ -231,6 +237,28 @@ impl CudaStream {
         self: &Arc<Self>,
         flags: sys::CUgraphInstantiate_flags,
     ) -> Result<Option<CudaGraph>, DriverError> {
+        let (capture, invalid) = self.take_capture()?;
+        if invalid.is_some() {
+            return Ok(None);
+        }
+        self.build(capture, flags).map(Some)
+    }
+
+    /// cudash-only: [`Self::end_capture`], but if the capture was invalidated, returns a graph of
+    /// what was recorded before that, with the error that invalidated it. The call that failed and
+    /// everything after it are missing from the graph, CUDA work included. When CUDA invalidated
+    /// the capture, the CUDA work since the last cudash operation is missing too, since CUDA
+    /// discards it.
+    pub fn end_capture_partial(
+        self: &Arc<Self>,
+        flags: sys::CUgraphInstantiate_flags,
+    ) -> Result<(CudaGraph, Option<DriverError>), DriverError> {
+        let (capture, invalid) = self.take_capture()?;
+        Ok((self.build(capture, flags)?, invalid))
+    }
+
+    /// Ends the capture, and returns it with the error that invalidated it, if any.
+    fn take_capture(&self) -> Result<(Capture, Option<DriverError>), DriverError> {
         let mut capture = {
             let mut state = self.core.state.lock().unwrap();
             state
@@ -239,59 +267,63 @@ impl CudaStream {
                 .ok_or_else(|| DriverError::StreamCapture("the stream isn't capturing".into()))?
         };
         #[cfg(feature = "cudarc")]
-        match crate::interop::graph::finish(&mut capture) {
-            Ok(Some(part)) => {
-                capture.close_vulkan()?;
-                capture.parts.push(Part::Cuda(part));
-            }
-            Ok(None) => {}
-            Err(_) => {
-                capture.invalidate("CUDA work");
+        {
+            // Always ends the CUDA capture. Its work after a cudash call was refused doesn't
+            // belong in a partial graph.
+            let refused = capture.invalid.is_some();
+            match crate::interop::graph::finish(&mut capture) {
+                Ok(Some(part)) if !refused => {
+                    capture.close_vulkan()?;
+                    capture.rec.parts.push(Part::Cuda(part));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    capture.invalidate(&format!("CUDA work ({e})"));
+                }
             }
         }
+        let invalid = (capture.invalid.as_ref())
+            .map(|op| DriverError::StreamCapture(format!("the capture was invalidated by {op}")));
+        Ok((capture, invalid))
+    }
+
+    /// Turns an ended capture into a graph.
+    fn build(
+        self: &Arc<Self>,
+        mut capture: Capture,
+        flags: sys::CUgraphInstantiate_flags,
+    ) -> Result<CudaGraph, DriverError> {
         #[cfg(not(feature = "cudarc"))]
         let _ = flags;
-        if capture.invalid.is_some() {
-            return Ok(None);
-        }
         capture.close_vulkan()?;
-        let mut parts = std::mem::take(&mut capture.parts);
-        if !matches!(parts.first(), Some(Part::Vulkan(_))) {
-            parts.insert(0, Part::Vulkan(None));
+        let device = capture.rec.device.clone();
+        // The pool moves to the graph, so the capture mustn't destroy it.
+        let null = Recorded::new(device, vk::CommandPool::null());
+        let mut rec = std::mem::replace(&mut capture.rec, null);
+        if !matches!(rec.parts.first(), Some(Part::Vulkan(_))) {
+            rec.parts.insert(0, Part::Vulkan(None));
         }
-        if !matches!(parts.last(), Some(Part::Vulkan(_))) {
-            parts.push(Part::Vulkan(None));
+        if !matches!(rec.parts.last(), Some(Part::Vulkan(_))) {
+            rec.parts.push(Part::Vulkan(None));
         }
         #[cfg(feature = "cudarc")]
-        for part in &mut parts {
-            if let Part::Cuda(part) = part {
-                part.instantiate(flags)
+        {
+            for part in &mut rec.parts {
+                if let Part::Cuda(part) = part {
+                    part.instantiate(flags)
+                        .map_err(|e| DriverError::Cuda(e.to_string()))?;
+                }
+            }
+            if rec.parts.iter().any(|p| matches!(p, Part::Cuda(_))) {
+                let shared = crate::interop::SharedSemaphore::new(self.context())
                     .map_err(|e| DriverError::Cuda(e.to_string()))?;
+                rec.shared = Some(shared);
             }
         }
-        #[cfg(feature = "cudarc")]
-        let shared = if parts.iter().any(|p| matches!(p, Part::Cuda(_))) {
-            let shared = crate::interop::SharedSemaphore::new(self.context());
-            Some(shared.map_err(|e| DriverError::Cuda(e.to_string()))?)
-        } else {
-            None
-        };
-        // The pool moves to the graph, so the capture mustn't destroy it.
-        let pool = std::mem::replace(&mut capture.pool, vk::CommandPool::null());
-        let recorded = Recorded {
-            device: capture.device.clone(),
-            pool,
-            parts,
-            reads: std::mem::take(&mut capture.reads),
-            writes: std::mem::take(&mut capture.writes),
-            _keep: std::mem::take(&mut capture.keep),
-            #[cfg(feature = "cudarc")]
-            shared,
-        };
-        Ok(Some(CudaGraph {
-            recorded: Arc::new(recorded),
+        Ok(CudaGraph {
+            recorded: Arc::new(rec),
             stream: self.clone(),
-        }))
+        })
     }
 
     /// Whether this stream is capturing, and whether the capture has been invalidated.
@@ -378,11 +410,15 @@ impl CudaGraph {
 
     /// Does nothing for Vulkan parts, which need no upload. Under `cudarc`, uploads CUDA parts.
     pub fn upload(&self) -> Result<(), DriverError> {
+        // Parts aren't thread-safe, so this takes the lock `launch` does.
         #[cfg(feature = "cudarc")]
-        for part in &self.recorded.parts {
-            if let Part::Cuda(part) = part {
-                part.upload()
-                    .map_err(|e| DriverError::Cuda(e.to_string()))?;
+        {
+            let _state = self.stream.core.state.lock().unwrap();
+            for part in &self.recorded.parts {
+                if let Part::Cuda(part) = part {
+                    part.upload()
+                        .map_err(|e| DriverError::Cuda(e.to_string()))?;
+                }
             }
         }
         Ok(())
@@ -484,6 +520,34 @@ mod tests {
         assert_eq!(stream.capture_status().unwrap(), status);
         stream.memcpy_htod(&[3u32; 4], &mut data).unwrap();
         assert_eq!(stream.clone_dtoh(&data).unwrap(), [3; 4]);
+    }
+
+    /// A partial capture replays what was recorded before the call that invalidated it.
+    #[test]
+    fn partial_captures_keep_what_was_recorded() {
+        let ctx = CudaContext::new(0).unwrap();
+        let stream = ctx.new_stream().unwrap();
+        let mut a = stream.clone_htod(&[1u32; 4]).unwrap();
+        let mut b = stream.clone_htod(&[1u32; 4]).unwrap();
+        stream.begin_capture(RELAXED).unwrap();
+        stream.memset_zeros(&mut a).unwrap();
+        assert!(stream.clone_dtoh(&a).is_err());
+        assert!(stream.memset_zeros(&mut b).is_err());
+        let (graph, invalid) = stream.end_capture_partial(Flags(0)).unwrap();
+        assert!(
+            matches!(invalid, Some(DriverError::StreamCapture(e)) if e.contains("memcpy_dtoh"))
+        );
+
+        graph.launch().unwrap();
+        assert_eq!(stream.clone_dtoh(&a).unwrap(), [0; 4]);
+        assert_eq!(stream.clone_dtoh(&b).unwrap(), [1; 4]);
+
+        stream.begin_capture(RELAXED).unwrap();
+        stream.memset_zeros(&mut b).unwrap();
+        let (graph, invalid) = stream.end_capture_partial(Flags(0)).unwrap();
+        assert!(invalid.is_none());
+        graph.launch().unwrap();
+        assert_eq!(stream.clone_dtoh(&b).unwrap(), [0; 4]);
     }
 
     #[test]
