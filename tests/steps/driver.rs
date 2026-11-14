@@ -369,11 +369,6 @@ fn when_hold(w: &mut World, count: usize, mib: usize) {
     w.error = held.err().map(|e| format!("{e:?}"));
 }
 
-#[then(regex = r"^all allocations succeed$")]
-fn then_all_succeed(w: &mut World) {
-    assert!(w.error.is_none(), "an allocation failed: {:?}", w.error);
-}
-
 #[when(regex = r"^I drop the stream and the context$")]
 fn when_drop_context(w: &mut World) {
     w.streams.clear();
@@ -672,8 +667,8 @@ fn when_launch_shared(w: &mut World, kernel: String, buffer: String, n: u32, sha
     launch_on(w, &kernel, &buffer, None, n, None, shared, false);
 }
 
-#[when(regex = r#"^I launch "(\w+)" on "(\w+)" with n (\d+) and (\d+) bytes of extra arguments$"#)]
-fn when_launch_extra(w: &mut World, kernel: String, buffer: String, n: u32, _bytes: u32) {
+#[when(regex = r#"^I launch "(\w+)" on "(\w+)" with n (\d+) and 300 bytes of extra arguments$"#)]
+fn when_launch_extra(w: &mut World, kernel: String, buffer: String, n: u32) {
     launch_on(w, &kernel, &buffer, None, n, None, 0, true);
 }
 
@@ -802,16 +797,6 @@ fn when_queue_and_drop(w: &mut World, times: usize) {
         }
     }
     w.error = None;
-}
-
-#[then(regex = r"^no error occurs$")]
-fn then_no_error(w: &mut World) {
-    assert!(w.error.is_none(), "unexpected error: {:?}", w.error);
-}
-
-#[then(regex = r"^the stream finishes without error$")]
-fn then_stream_finishes(w: &mut World) {
-    assert!(w.error.is_none(), "unexpected error: {:?}", w.error);
 }
 
 // ---- Whens: streams --------------------------------------------------------------------
@@ -950,8 +935,11 @@ fn then_result_empty(w: &mut World) {
     );
 }
 
+#[then(regex = r"^all allocations succeed$")]
+#[then(regex = r"^no error occurs$")]
+#[then(regex = r"^the stream finishes without error$")]
 #[then(regex = r"^the result is no error$")]
-fn then_no_error_result(w: &mut World) {
+fn then_no_error(w: &mut World) {
     assert!(w.error.is_none(), "unexpected error: {:?}", w.error);
 }
 

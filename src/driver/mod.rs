@@ -22,14 +22,17 @@
 mod context;
 pub(crate) mod device;
 mod error;
+pub(crate) mod graph;
 mod host;
 mod image;
 mod kernel;
 mod slice;
 pub(crate) mod stream;
+pub mod sys;
 
 pub use context::CudaContext;
 pub use error::DriverError;
+pub use graph::CudaGraph;
 pub use host::PinnedHostSlice;
 pub use image::{CudaImage, ImageFormat};
 pub use kernel::{CudaFunction, CudaModule, LaunchArgs, LaunchConfig, PushKernelArg, Spirv};

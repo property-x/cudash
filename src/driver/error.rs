@@ -26,6 +26,11 @@ pub enum DriverError {
     HostMemoryNotRegistered,
     /// An image can't have this size or format on this GPU.
     InvalidImage(String),
+    /// A call that can't be captured, or a capture call out of turn. Like CUDA, a call that
+    /// can't be captured also invalidates the capture.
+    StreamCapture(String),
+    /// From the CUDA part of a graph, under the `cudarc` feature.
+    Cuda(String),
 }
 
 impl fmt::Display for DriverError {
@@ -42,6 +47,8 @@ impl fmt::Display for DriverError {
             Self::HostMemoryAlreadyRegistered => f.write_str("host memory is already registered"),
             Self::HostMemoryNotRegistered => f.write_str("no registered host memory starts here"),
             Self::InvalidImage(e) => write!(f, "invalid image: {e}"),
+            Self::StreamCapture(e) => write!(f, "stream capture: {e}"),
+            Self::Cuda(e) => write!(f, "CUDA error: {e}"),
         }
     }
 }

@@ -131,7 +131,7 @@ pub trait DevicePtr<T>: DeviceSlice<T> {
         (address, SyncOnDrop::new(stream, raw.buffer, false))
     }
 
-    /// A `width * height` image over this memory, in rows, without copying. See [`CudaImage`].
+    /// A `width * height` image over this memory, in rows, without copying. See [`CudaImage`](super::CudaImage).
     ///
     /// # Panics
     /// If this doesn't hold exactly `width * height` elements.

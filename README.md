@@ -23,6 +23,8 @@ Hint: This is a prototype to help me learn and understand Vulkan compute from a 
 
 **Contributions welcome!**
 
+The guide in `docs/` covers every feature in detail. Build it with `just docs`.
+
 ## What's covered
 
 - **Memory:** `alloc`, `alloc_zeros`, `clone_htod`, `clone_dtoh`, `clone_dtod`, `memcpy_htod`,
@@ -33,6 +35,9 @@ Hint: This is a prototype to help me learn and understand Vulkan compute from a 
 - **Streams:** `default_stream`, `new_stream`, `fork` and `synchronize`. Work runs in call order, and
   buffers used from several streams are ordered automatically.
 - **Kernels:** `load_module`, `load_function`, `launch_builder`, `arg`, `launch` and `LaunchConfig`.
+- **Graphs:** `begin_capture`, `end_capture`, `capture_status`, and `CudaGraph::launch` and `upload`.
+  Kernels, device copies, fills and pinned host copies are recorded into reusable command buffers.
+  Other host copies and `synchronize` invalidate the capture, as in CUDA.
 
 ## Current Limitations
 
@@ -131,7 +136,8 @@ With `use cudash::interop::AsCuda`, `slice.as_cuda()` and `slice.as_cuda_mut()` 
 view to cudarc calls without copying. Each cudash stream gets its own CUDA stream on first use, and
 `as_cuda_with(&cuda_stream)` picks another one. `SharedSemaphore::new(&ctx)` creates a semaphore both
 APIs can use. `ctx.as_cuda()` gives the matching CUDA context, and `stream.as_cuda()` the paired CUDA
-stream.
+stream. cudarc work on the paired stream while the cudash stream captures becomes part of the graph, with
+CUDA's own capture.
 
 ## Building and testing
 
@@ -141,12 +147,15 @@ Run `just` to list every command. The main ones:
 
 | Command            | What it does                                                   |
 |--------------------|----------------------------------------------------------------|
+| `just setup`       | Installs the tools, and on an NVIDIA distrobox the Vulkan driver manifest |
 | `just doctor`      | Shows the tools and GPUs this machine has                      |
 | `just test`        | Runs the tests. `just test ptx` runs only those matching `ptx` |
 | `just validate`    | Runs the tests under Vulkan validation, and fails on any error |
 | `just lint`        | Checks formatting and clippy                                   |
 | `just ci`          | Runs everything that works without an NVIDIA GPU               |
 | `just test-nvidia` | Runs the real CUDA tests. Needs an NVIDIA GPU                  |
+| `just docs`        | Builds the guide in `docs/` into `target/book`. `just docs-serve` serves it with live reload |
+| `just doc`         | Builds the Rust API docs                                       |
 
 `build.rs` compiles the kernels in `tests/kernels` and `examples/slang` into `OUT_DIR`, as SPIR-V and
 PTX. Without NVRTC, you get a warning and no PTX. `SLANGC` and `NVRTC_PATH` override where the tools
