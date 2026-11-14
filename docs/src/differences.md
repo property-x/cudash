@@ -30,6 +30,7 @@ Names and signatures follow `cudarc::driver` 0.19.10 unless this page says other
 
 ## Added by cudash
 
+- **Partial captures:** `end_capture_partial` keeps what was recorded before a capture was invalidated.
 - **Host registration:** `host_register` and `host_unregister`, which cudarc only has in `sys`.
 - **Images:** `CudaImage`, `to_image`, `as_image`, `clone_to_image`, `imgcpy_dtod`.
 - **Vulkan access:** `vk_instance`, `vk_device`, `vk_buffer` and the rest.

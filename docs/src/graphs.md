@@ -29,6 +29,7 @@ assert_eq!(stream.clone_dtoh(&data)?, [0; 4]);
 |---|---|
 | `stream.begin_capture(mode)` | Starts recording the stream's work instead of running it |
 | `stream.end_capture(flags)` | Stops recording. Returns the graph, or `Ok(None)` if the capture was invalidated |
+| `stream.end_capture_partial(flags)` | cudash-only. Like `end_capture`, but an invalidated capture still returns a graph of what was recorded, with the error |
 | `stream.capture_status()` | `CU_STREAM_CAPTURE_STATUS_NONE`, `_ACTIVE` or `_INVALIDATED` |
 | `graph.launch()` | Replays the graph on the stream it was captured on |
 | `graph.upload()` | Does nothing for Vulkan work. Uploads the CUDA parts of a mixed graph |
@@ -43,7 +44,7 @@ parts of a [mixed graph](#mixed-graphs).
 |---|---|
 | Kernel launches, `memcpy_dtod`, `clone_dtod`, `memset_zeros`, `alloc_zeros`, `device_ptr`, image copies | Recorded |
 | `memcpy_htod` from a `PinnedHostSlice` | Recorded. Each replay reads the pinned memory as it is then |
-| `memcpy_htod` from other host memory, `memcpy_dtoh`, `clone_dtoh`, `synchronize`, launching another graph | Returns `DriverError::StreamCapture`, and invalidates the capture |
+| `memcpy_htod` from other host memory, `memcpy_dtoh`, `clone_dtoh`, `synchronize`, `frame`, `stop_frame`, launching another graph | Returns `DriverError::StreamCapture`, and invalidates the capture |
 | A second `begin_capture` on the same stream | Returns `DriverError::StreamCapture` |
 
 As in CUDA, a call that can't be captured invalidates the capture: later calls on the stream return errors until
@@ -54,6 +55,32 @@ Things that are fixed at capture time, as in CUDA:
 - **Kernel arguments.** Values and buffer addresses are recorded. To launch with other values, capture again.
 - **Allocations.** `alloc_zeros` or `clone_dtod` inside a capture allocates once, at capture time. Every replay
   reuses that memory, and `alloc_zeros` zeroes it again.
+
+## Keeping a partial capture
+
+`end_capture_partial` returns `(CudaGraph, Option<DriverError>)`. If the capture was invalidated, the graph holds
+what was recorded before that, and the error says what invalidated it. The call that failed and everything after it
+are missing, so check the error before replaying: kernels that were meant to follow a refused copy would run on
+stale input.
+
+In a [mixed graph](#mixed-graphs), CUDA can invalidate the capture too, for example when something synchronizes the
+paired CUDA stream. CUDA then discards its work since the last cudash operation, and earlier CUDA parts are kept.
+
+```rust
+# use cudash::driver::*;
+# use cudash::driver::sys::{CUgraphInstantiate_flags, CUstreamCaptureMode};
+# fn main() -> Result<(), DriverError> {
+# let stream = CudaContext::new(0)?.new_stream()?;
+# let mut data = stream.alloc_zeros::<u32>(4)?;
+stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+stream.memset_zeros(&mut data)?;
+let _ = stream.clone_dtoh(&data);   // refused: invalidates the capture
+let (graph, invalid) = stream.end_capture_partial(CUgraphInstantiate_flags(0))?;
+assert!(invalid.is_some());
+graph.launch()?;                     // replays the memset
+# Ok(())
+# }
+```
 
 ## Replays
 

@@ -35,7 +35,7 @@ a slice with work still queued is safe.
 
 | Call | Direction | Returns |
 |---|---|---|
-| `clone_htod(&src)`, `memcpy_htod(&src, &mut dst)` | Host to device | At once. The data is copied on the CPU first, so `src` is free to change |
+| `clone_htod(&src)`, `memcpy_htod(&src, &mut dst)` | Host to device | At once. The data is copied on the CPU first, so `src` is free to change, except for [registered memory](#host-memory-without-staging) |
 | `clone_dtoh(&src)`, `memcpy_dtoh(&src, &mut dst)` | Device to host | When the copy has finished |
 | `clone_dtod(&src)`, `memcpy_dtod(&src, &mut dst)` | Device to device | At once |
 | `memset_zeros(&mut dst)` | Fill with zeros | At once |
@@ -76,9 +76,10 @@ assert!(buf.try_slice(4..20).is_none());
 - **Pinned memory,** `ctx.alloc_pinned::<T>(len)`, returns a `PinnedHostSlice<T>`, as in cudarc. Copies read and
   write it directly. Its accessors (`as_slice`, `as_mut_slice`, `as_ptr`, `as_mut_ptr`) wait for copies that use it,
   so they never see one half done.
-- **Registered memory,** `ctx.host_register(&data)`, imports existing host memory, like CUDA's `cuMemHostRegister`
-  (cudarc only has that in `sys`). Copies from inside it return without copying on the CPU.
-  `ctx.host_unregister(ptr)` waits for those copies. Registering needs `VK_EXT_external_memory_host`, and not
+- **Registered memory,** `unsafe { ctx.host_register(&data) }`, imports existing host memory, like CUDA's
+  `cuMemHostRegister` (cudarc only has that in `sys`). Copies from inside it return without copying on the CPU, and
+  read the memory when the GPU gets to them, so don't write it while a copy may be running: synchronize the stream
+  first. Until `ctx.host_unregister(ptr)`, which waits for those copies, the memory must stay allocated and not move. Registering needs `VK_EXT_external_memory_host`, and not
   every kind of memory can be registered: on RADV, `static` data can't.
 
 ```rust
