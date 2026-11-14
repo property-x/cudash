@@ -308,6 +308,58 @@ mod tests {
         assert!(failures.is_empty(), "{failures:?}");
     }
 
+    /// CUDA invalidating the capture loses the CUDA work since the last cudash operation, and
+    /// a partial capture keeps the Vulkan work before it.
+    #[test]
+    fn cuda_invalidation_keeps_the_vulkan_prefix() {
+        let _turn = CUDA_CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = CudaContext::new(0).unwrap();
+        let Some((vk_double, cuda_add_one)) = kernels(&ctx) else {
+            return;
+        };
+        let stream = ctx.new_stream().unwrap();
+        let mut x = stream.clone_htod(&vec![1.0f32; N]).unwrap();
+        stream
+            .begin_capture(CU_STREAM_CAPTURE_MODE_RELAXED)
+            .unwrap();
+        double(&stream, &vk_double, &mut x);
+        add_one(&cuda_add_one, &mut x).unwrap();
+        // Synchronizing a capturing CUDA stream invalidates its capture.
+        assert!(stream.as_cuda().unwrap().synchronize().is_err());
+        assert_eq!(
+            stream.as_cuda().unwrap().capture_status().unwrap(),
+            sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_INVALIDATED
+        );
+        let (graph, invalid) = stream.end_capture_partial(Flags(0)).unwrap();
+        println!("invalidated by: {invalid:?}");
+        assert!(invalid.is_some());
+        graph.launch().unwrap();
+        assert!(stream.clone_dtoh(&x).unwrap().iter().all(|&v| v == 2.0));
+    }
+
+    /// CUDA work queued after a refused cudash call isn't in a partial graph.
+    #[test]
+    fn partial_captures_drop_cuda_work_after_a_refused_call() {
+        let _turn = CUDA_CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = CudaContext::new(0).unwrap();
+        let Some((vk_double, cuda_add_one)) = kernels(&ctx) else {
+            return;
+        };
+        let stream = ctx.new_stream().unwrap();
+        let mut x = stream.clone_htod(&vec![1.0f32; N]).unwrap();
+        stream
+            .begin_capture(CU_STREAM_CAPTURE_MODE_RELAXED)
+            .unwrap();
+        double(&stream, &vk_double, &mut x);
+        assert!(stream.clone_dtoh(&x).is_err());
+        // Whether the lend itself is refused doesn't matter: nothing of it may replay.
+        let _ = add_one(&cuda_add_one, &mut x);
+        let (graph, invalid) = stream.end_capture_partial(Flags(0)).unwrap();
+        assert!(invalid.is_some());
+        graph.launch().unwrap();
+        assert!(stream.clone_dtoh(&x).unwrap().iter().all(|&v| v == 2.0));
+    }
+
     /// A lend taken before the capture and dropped during it, and one bound to another
     /// stream's capturing CUDA stream.
     #[test]
