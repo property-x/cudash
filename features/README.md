@@ -21,6 +21,7 @@ One home per behavior, so the two don't drift apart:
 | `driver_transfers.feature` | Host, device and view copies in `cudash::driver`           | Any Vulkan 1.3 GPU      |
 | `driver_kernels.feature`   | SPIR-V launches, arguments, limits and block sizes         | Any Vulkan 1.3 GPU      |
 | `driver_streams.feature`   | Ordering, fork, synchronize, threads                       | Any Vulkan 1.3 GPU      |
+| `driver_graphs.feature`    | Stream capture, graph replay, refused calls                | Any Vulkan 1.3 GPU      |
 | `driver_context.feature`   | Device choice and description                              | Any Vulkan 1.3 GPU      |
 | `interop_memory.feature`   | No CUDA: `ctx.as_cuda()`, `stream.as_cuda()`, lending give errors | Any Vulkan 1.3 GPU      |
 | `interop_sharing.feature`  | Turn-taking and semaphore timeouts. Nothing runs these yet | NVIDIA with CUDA        |

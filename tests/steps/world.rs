@@ -343,6 +343,8 @@ pub struct World {
     pub streams: HashMap<String, Arc<driver::CudaStream>>,
     pub dbufs: HashMap<String, DBuf>,
     pub kernels: HashMap<String, Arc<driver::CudaFunction>>,
+    pub graphs: HashMap<String, Arc<driver::CudaGraph>>,
+    pub pinned: Option<driver::PinnedHostSlice<f32>>,
     pub spirv: HashMap<String, Vec<u8>>,
 
     // Host data and the last value read back, shared by both layers

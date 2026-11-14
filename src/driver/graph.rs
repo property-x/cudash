@@ -259,6 +259,7 @@ impl CudaStream {
 
     /// Ends the capture, and returns it with the error that invalidated it, if any.
     fn take_capture(&self) -> Result<(Capture, Option<DriverError>), DriverError> {
+        #[cfg_attr(not(feature = "cudarc"), allow(unused_mut))]
         let mut capture = {
             let mut state = self.core.state.lock().unwrap();
             state

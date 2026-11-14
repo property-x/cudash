@@ -1,6 +1,7 @@
 //! Step definitions for the feature files, and the filter that decides which scenarios run.
 
 pub mod driver;
+pub mod graph;
 pub mod interop;
 pub mod slang;
 pub mod world;
