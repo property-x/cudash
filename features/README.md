@@ -10,6 +10,7 @@ One home per behavior, so the two don't drift apart:
 - **Driver behavior** (`cudash::driver`) lives here. `tests/driver.rs` keeps only cudarc's own examples and what no
   scenario
   covers.
+- **Images** (`CudaImage`) are in `tests/images.rs`, not here, because reading an image back needs hand-written Vulkan.
 - **NVIDIA interop** has no step definitions, so its Rust tests (`tests/interop_*.rs`) are the checks. A scenario for it
   is tagged `@untested` until the Rust tests cover it, and isn't written when they already do.
 
@@ -34,6 +35,7 @@ One home per behavior, so the two don't drift apart:
 |------------------|--------------------------------------------------------------------------------------|
 | `@vulkan`        | Runs on any Vulkan 1.3 GPU, including AMD and Intel                                  |
 | `@nvidia`        | Needs an NVIDIA GPU with CUDA. Skips elsewhere unless `CUDASH_REQUIRE_NVIDIA` is set |
+| `@non-nvidia`    | Needs a Vulkan GPU from another vendor. Skips on an NVIDIA-only machine              |
 | `@cudarc`        | Needs the `cudarc` feature, which is on by default                                   |
 | `@untested`      | Behaviour the code has, but no test checks yet                                       |
 | `@planned`       | Designed in `plan/api.md`, not implemented                                           |
