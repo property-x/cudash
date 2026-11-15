@@ -126,6 +126,8 @@ graph.launch()?;
 Each cudash call ends the CUDA part captured so far, so the graph becomes alternating Vulkan and CUDA parts. `launch`
 replays them in order, joined through a semaphore both APIs share, with new values for every replay.
 
+![A four-step Vulkan and CUDA pipeline run call by call, then as one captured graph: one host call, a Vulkan part and a CUDA part joined by semaphore handoffs](media/graph_pipeline_vk_cuda_dark.gif)
+
 - **All three capture modes work.** In `GLOBAL` mode, CUDA refuses unsafe CUDA calls from other threads during the
   capture, and those calls can invalidate it. That's CUDA's own rule.
 - **A lent buffer is kept alive by the graph.** Dropping a lend while capturing doesn't synchronize the CUDA stream,
