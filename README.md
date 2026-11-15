@@ -139,6 +139,11 @@ APIs can use. `ctx.as_cuda()` gives the matching CUDA context, and `stream.as_cu
 stream. cudarc work on the paired stream while the cudash stream captures becomes part of the graph, with
 CUDA's own capture.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/graph_pipeline_vk_cuda_dark.gif">
+  <img alt="A four-step Vulkan and CUDA pipeline run call by call, then as one captured graph: one host call, a Vulkan part and a CUDA part joined by semaphore handoffs" src="docs/media/graph_pipeline_vk_cuda.gif">
+</picture>
+
 ## Building and testing
 
 Everything is available using [just](https://just.systems).
