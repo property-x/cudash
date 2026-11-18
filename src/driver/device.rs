@@ -37,10 +37,15 @@ pub(crate) struct DeviceState {
     pub(crate) properties: vk::PhysicalDeviceProperties,
     pub(crate) uuid: [u8; 16],
     memory: vk::PhysicalDeviceMemoryProperties,
+    /// `maxBufferSize` and `maxMemoryAllocationSize`, checked before Vulkan sees a bigger request.
+    max_buffer: u64,
+    max_allocation: u64,
     pub(crate) ordinal: usize,
     host_import: Option<HostImport>,
     /// The optional extensions that were enabled.
     pub(crate) extensions: Vec<&'static CStr>,
+    /// SPIR-V capabilities a kernel may not declare, with the feature they need.
+    pub(crate) unsupported_capabilities: Vec<(u32, &'static str)>,
     pub(crate) frame_boundary: bool,
     /// Labels operations for tools such as RenderDoc, where the instance has the extension.
     pub(crate) debug_utils: Option<ext::debug_utils::Device>,
@@ -139,9 +144,21 @@ fn available_extensions(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Vec
         ext::external_memory_host::NAME,
         khr::portability_subset::NAME,
         ext::frame_boundary::NAME,
+        // Shader features, enabled for whichever kernel wants them.
+        ext::shader_atomic_float::NAME,
+        ext::shader_atomic_float2::NAME,
+        khr::cooperative_matrix::NAME,
+        khr::shader_clock::NAME,
+        khr::shader_maximal_reconvergence::NAME,
+        khr::shader_subgroup_rotate::NAME,
+        khr::shader_float_controls2::NAME,
+        khr::shader_expect_assume::NAME,
     ];
     #[cfg(feature = "cudarc")]
     wanted.extend(crate::interop::EXPORT_EXTENSIONS);
+    // For `CudaSlice::export_dma_buf`, which also needs `VK_KHR_external_memory_fd` from above.
+    #[cfg(feature = "cudarc")]
+    wanted.push(ext::external_memory_dma_buf::NAME);
     wanted.retain(|name| have.iter().any(|e| e.extension_name_as_c_str() == Ok(name)));
     wanted
 }
@@ -166,6 +183,64 @@ fn missing_required_feature(
     ]
     .into_iter()
     .find_map(|(name, enabled)| (enabled != vk::TRUE).then_some(name))
+}
+
+// SPIR-V `Capability` values, from Khronos's `spirv.core.grammar.json` or `spirv`.
+const CAPABILITY_FLOAT16: u32 = 9;
+const CAPABILITY_FLOAT64: u32 = 10;
+const CAPABILITY_INT64: u32 = 11;
+const CAPABILITY_INT64_ATOMICS: u32 = 12;
+const CAPABILITY_INT16: u32 = 22;
+const CAPABILITY_INT8: u32 = 39;
+const CAPABILITY_STORAGE_BUFFER_16BIT_ACCESS: u32 = 4433;
+const CAPABILITY_STORAGE_BUFFER_8BIT_ACCESS: u32 = 4448;
+const CAPABILITY_SHADER_CLOCK_KHR: u32 = 5055;
+const CAPABILITY_ATOMIC_FLOAT32_MIN_MAX_EXT: u32 = 5612;
+const CAPABILITY_ATOMIC_FLOAT64_MIN_MAX_EXT: u32 = 5613;
+const CAPABILITY_ATOMIC_FLOAT16_MIN_MAX_EXT: u32 = 5616;
+const CAPABILITY_EXPECT_ASSUME_KHR: u32 = 5629;
+const CAPABILITY_COOPERATIVE_MATRIX_KHR: u32 = 6022;
+const CAPABILITY_GROUP_NON_UNIFORM_ROTATE_KHR: u32 = 6026;
+const CAPABILITY_FLOAT_CONTROLS2: u32 = 6029;
+const CAPABILITY_ATOMIC_FLOAT32_ADD_EXT: u32 = 6033;
+const CAPABILITY_ATOMIC_FLOAT64_ADD_EXT: u32 = 6034;
+const CAPABILITY_ATOMIC_FLOAT16_ADD_EXT: u32 = 6095;
+
+/// SPIR-V capabilities whose feature is off, as `(capability, feature)`. `extra` holds the
+/// extension features; a capability counts as supported when any of its features is on.
+fn unsupported_capabilities(
+    core: &vk::PhysicalDeviceFeatures,
+    v11: &vk::PhysicalDeviceVulkan11Features,
+    v12: &vk::PhysicalDeviceVulkan12Features,
+    extra: [(u32, &'static str, vk::Bool32); 11],
+) -> Vec<(u32, &'static str)> {
+    [
+        (CAPABILITY_FLOAT16, "shaderFloat16", v12.shader_float16),
+        (CAPABILITY_FLOAT64, "shaderFloat64", core.shader_float64),
+        (CAPABILITY_INT64, "shaderInt64", core.shader_int64),
+        (
+            CAPABILITY_INT64_ATOMICS,
+            "shaderBufferInt64Atomics",
+            v12.shader_buffer_int64_atomics | v12.shader_shared_int64_atomics,
+        ),
+        (CAPABILITY_INT16, "shaderInt16", core.shader_int16),
+        (CAPABILITY_INT8, "shaderInt8", v12.shader_int8),
+        (
+            CAPABILITY_STORAGE_BUFFER_16BIT_ACCESS,
+            "storageBuffer16BitAccess",
+            v11.storage_buffer16_bit_access,
+        ),
+        (
+            CAPABILITY_STORAGE_BUFFER_8BIT_ACCESS,
+            "storageBuffer8BitAccess",
+            v12.storage_buffer8_bit_access,
+        ),
+    ]
+    .into_iter()
+    .chain(extra)
+    .filter(|&(_, _, on)| on != vk::TRUE)
+    .map(|(capability, name, _)| (capability, name))
+    .collect()
 }
 
 impl Device {
@@ -230,12 +305,15 @@ impl Device {
             .get(ordinal)
             .ok_or(DriverError::NoSuchDevice(ordinal))?;
         let extensions = available_extensions(instance, pd);
-        let (device, queue_family, physical_device, frame_boundary) =
+        let (device, queue_family, physical_device, frame_boundary, unsupported_capabilities) =
             unsafe { Self::create(instance, pd, &extensions) }?;
         unsafe {
-            let mut id = vk::PhysicalDeviceIDProperties::default();
+            let mut v11 = vk::PhysicalDeviceVulkan11Properties::default();
+            let mut v13 = vk::PhysicalDeviceVulkan13Properties::default();
             let mut import = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
-            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut id);
+            let mut properties = vk::PhysicalDeviceProperties2::default()
+                .push_next(&mut v11)
+                .push_next(&mut v13);
             let has_host_import = extensions.contains(&ext::external_memory_host::NAME);
             if has_host_import {
                 properties = properties.push_next(&mut import);
@@ -252,7 +330,9 @@ impl Device {
             Ok(DeviceState {
                 queue: Mutex::new(device.get_device_queue(queue_family, 0)),
                 memory: instance.get_physical_device_memory_properties(physical_device),
-                uuid: id.device_uuid,
+                uuid: v11.device_uuid,
+                max_buffer: v13.max_buffer_size,
+                max_allocation: v11.max_memory_allocation_size,
                 properties,
                 instance: instance.clone(),
                 physical_device,
@@ -261,6 +341,7 @@ impl Device {
                 ordinal,
                 host_import,
                 extensions,
+                unsupported_capabilities,
                 frame_boundary,
                 debug_utils,
                 #[cfg(feature = "cudarc")]
@@ -270,48 +351,147 @@ impl Device {
     }
 
     /// Enables every feature the GPU has, since a kernel could use any of them.
+    #[allow(clippy::type_complexity)]
     unsafe fn create(
         instance: &ash::Instance,
         pd: vk::PhysicalDevice,
         extensions: &[&CStr],
-    ) -> Result<(ash::Device, u32, vk::PhysicalDevice, bool), DriverError> {
+    ) -> Result<
+        (
+            ash::Device,
+            u32,
+            vk::PhysicalDevice,
+            bool,
+            Vec<(u32, &'static str)>,
+        ),
+        DriverError,
+    > {
         unsafe {
             let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
-            let frame_boundary_available = extensions.contains(&ext::frame_boundary::NAME);
             let mut frame_boundary = vk::PhysicalDeviceFrameBoundaryFeaturesEXT::default();
+            let mut atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
+            let mut atomic_float2 = vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT::default();
+            let mut cooperative_matrix = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
+            let mut clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default();
+            let mut reconvergence =
+                vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR::default();
+            let mut rotate = vk::PhysicalDeviceShaderSubgroupRotateFeaturesKHR::default();
+            let mut float_controls2 = vk::PhysicalDeviceShaderFloatControls2FeaturesKHR::default();
+            let mut expect_assume = vk::PhysicalDeviceShaderExpectAssumeFeaturesKHR::default();
+            // Builds the same chain twice, to query and then to enable, so it clears each
+            // `p_next` the query left behind. A struct is only chained when its extension is on.
+            macro_rules! chain {
+                (@ $features:ident; $($name:expr => $s:ident,)*) => {{
+                    $(if extensions.contains(&$name) {
+                        $s.p_next = std::ptr::null_mut();
+                        $features = $features.push_next(&mut $s);
+                    })*
+                    $features
+                }};
+                ($features:expr) => {{
+                    let mut features = $features;
+                    for s in [&mut v11.p_next, &mut v12.p_next, &mut v13.p_next] {
+                        *s = std::ptr::null_mut();
+                    }
+                    features = features.push_next(&mut v11).push_next(&mut v12).push_next(&mut v13);
+                    chain!(@ features;
+                        ext::frame_boundary::NAME => frame_boundary,
+                        ext::shader_atomic_float::NAME => atomic_float,
+                        ext::shader_atomic_float2::NAME => atomic_float2,
+                        khr::cooperative_matrix::NAME => cooperative_matrix,
+                        khr::shader_clock::NAME => clock,
+                        khr::shader_maximal_reconvergence::NAME => reconvergence,
+                        khr::shader_subgroup_rotate::NAME => rotate,
+                        khr::shader_float_controls2::NAME => float_controls2,
+                        khr::shader_expect_assume::NAME => expect_assume,
+                    )
+                }};
+            }
             let mut features = {
-                let mut query = vk::PhysicalDeviceFeatures2::default()
-                    .push_next(&mut v11)
-                    .push_next(&mut v12)
-                    .push_next(&mut v13);
-                if frame_boundary_available {
-                    query = query.push_next(&mut frame_boundary);
-                }
+                let mut query = chain!(vk::PhysicalDeviceFeatures2::default());
                 instance.get_physical_device_features2(pd, &mut query);
                 query.features
             };
             if let Some(name) = missing_required_feature(&v12, &v13) {
                 return Err(DriverError::MissingFeature(name));
             }
+            let unsupported = unsupported_capabilities(
+                &features,
+                &v11,
+                &v12,
+                [
+                    (
+                        CAPABILITY_ATOMIC_FLOAT32_ADD_EXT,
+                        "shaderBufferFloat32AtomicAdd",
+                        atomic_float.shader_buffer_float32_atomic_add
+                            | atomic_float.shader_shared_float32_atomic_add
+                            | atomic_float.shader_image_float32_atomic_add,
+                    ),
+                    (
+                        CAPABILITY_ATOMIC_FLOAT64_ADD_EXT,
+                        "shaderBufferFloat64AtomicAdd",
+                        atomic_float.shader_buffer_float64_atomic_add
+                            | atomic_float.shader_shared_float64_atomic_add,
+                    ),
+                    (
+                        CAPABILITY_ATOMIC_FLOAT16_ADD_EXT,
+                        "shaderBufferFloat16AtomicAdd",
+                        atomic_float2.shader_buffer_float16_atomic_add
+                            | atomic_float2.shader_shared_float16_atomic_add,
+                    ),
+                    (
+                        CAPABILITY_ATOMIC_FLOAT32_MIN_MAX_EXT,
+                        "shaderBufferFloat32AtomicMinMax",
+                        atomic_float2.shader_buffer_float32_atomic_min_max
+                            | atomic_float2.shader_shared_float32_atomic_min_max
+                            | atomic_float2.shader_image_float32_atomic_min_max,
+                    ),
+                    (
+                        CAPABILITY_ATOMIC_FLOAT64_MIN_MAX_EXT,
+                        "shaderBufferFloat64AtomicMinMax",
+                        atomic_float2.shader_buffer_float64_atomic_min_max
+                            | atomic_float2.shader_shared_float64_atomic_min_max,
+                    ),
+                    (
+                        CAPABILITY_ATOMIC_FLOAT16_MIN_MAX_EXT,
+                        "shaderBufferFloat16AtomicMinMax",
+                        atomic_float2.shader_buffer_float16_atomic_min_max
+                            | atomic_float2.shader_shared_float16_atomic_min_max,
+                    ),
+                    (
+                        CAPABILITY_COOPERATIVE_MATRIX_KHR,
+                        "cooperativeMatrix",
+                        cooperative_matrix.cooperative_matrix,
+                    ),
+                    (
+                        CAPABILITY_SHADER_CLOCK_KHR,
+                        "shaderSubgroupClock",
+                        clock.shader_subgroup_clock | clock.shader_device_clock,
+                    ),
+                    (
+                        CAPABILITY_GROUP_NON_UNIFORM_ROTATE_KHR,
+                        "shaderSubgroupRotate",
+                        rotate.shader_subgroup_rotate,
+                    ),
+                    (
+                        CAPABILITY_FLOAT_CONTROLS2,
+                        "shaderFloatControls2",
+                        float_controls2.shader_float_controls2,
+                    ),
+                    (
+                        CAPABILITY_EXPECT_ASSUME_KHR,
+                        "shaderExpectAssume",
+                        expect_assume.shader_expect_assume,
+                    ),
+                ],
+            );
             // Slows everything down, and CUDA has no equivalent.
             features.robust_buffer_access = vk::FALSE;
-            v11.p_next = std::ptr::null_mut();
-            v12.p_next = std::ptr::null_mut();
-            v13.p_next = std::ptr::null_mut();
-            let frame_boundary =
-                frame_boundary_available && frame_boundary.frame_boundary == vk::TRUE;
-            let mut features = vk::PhysicalDeviceFeatures2::default()
-                .features(features)
-                .push_next(&mut v11)
-                .push_next(&mut v12)
-                .push_next(&mut v13);
-            let mut frame_boundary_features = vk::PhysicalDeviceFrameBoundaryFeaturesEXT::default()
-                .frame_boundary(frame_boundary);
-            if frame_boundary {
-                features = features.push_next(&mut frame_boundary_features);
-            }
+            cooperative_matrix.cooperative_matrix_robust_buffer_access = vk::FALSE;
+            let frame_boundary_enabled = frame_boundary.frame_boundary == vk::TRUE;
+            let mut features = chain!(vk::PhysicalDeviceFeatures2::default().features(features));
 
             let queue_family = compute_queue_family(instance, pd).expect("checked in enumerate");
             let priorities = [1.0];
@@ -327,7 +507,8 @@ impl Device {
                 instance.create_device(pd, &info, None)?,
                 queue_family,
                 pd,
-                frame_boundary,
+                frame_boundary_enabled,
+                unsupported,
             ))
         }
     }
@@ -409,6 +590,9 @@ pub(crate) struct Buffer {
     /// dedicated allocation, which CUDA has to be told.
     #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
     pub(crate) export: Option<Dedicated>,
+    /// Whether the memory can also be exported as a dma-buf, for `CudaSlice::export_dma_buf`.
+    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    pub(crate) dma_buf: bool,
     #[cfg(feature = "cudarc")]
     pub(crate) cuda_mappings: Mutex<HashMap<usize, Arc<crate::interop::buffer::Mapping>>>,
 }
@@ -416,10 +600,22 @@ pub(crate) struct Buffer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Dedicated(pub(crate) bool);
 
-/// Whether memory for `usage` can be exported to CUDA, and whether the driver then only
-/// allows dedicated allocations. Needs the export extensions, which the `cudarc` feature enables.
-fn export_support(device: &Device, usage: vk::BufferUsageFlags) -> Option<Dedicated> {
-    if !device.extensions.contains(&khr::external_memory_fd::NAME) {
+/// Whether memory for `usage` can be exported with all of `handles`, and whether the driver then
+/// only allows dedicated allocations. Needs the export extensions, which the `cudarc` feature
+/// enables.
+fn export_support(
+    device: &Device,
+    usage: vk::BufferUsageFlags,
+    handles: vk::ExternalMemoryHandleTypeFlags,
+) -> Option<Dedicated> {
+    let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+    if handles.is_empty()
+        || !device.extensions.contains(&khr::external_memory_fd::NAME)
+        || handles.contains(dma_buf)
+            && !device
+                .extensions
+                .contains(&ext::external_memory_dma_buf::NAME)
+    {
         return None;
     }
     let info = vk::PhysicalDeviceExternalBufferInfo::default()
@@ -435,12 +631,10 @@ fn export_support(device: &Device, usage: vk::BufferUsageFlags) -> Option<Dedica
                 &mut properties,
             )
     };
-    let features = properties
-        .external_memory_properties
-        .external_memory_features;
+    let properties = properties.external_memory_properties;
+    let features = properties.external_memory_features;
     use vk::ExternalMemoryFeatureFlags as F;
-    features
-        .contains(F::EXPORTABLE)
+    (features.contains(F::EXPORTABLE) && properties.compatible_handle_types.contains(handles))
         .then_some(Dedicated(features.contains(F::DEDICATED_ONLY)))
 }
 
@@ -470,6 +664,7 @@ impl Buffer {
             tracking: Mutex::default(),
             allocation_size: 0,
             export: None,
+            dma_buf: false,
             #[cfg(feature = "cudarc")]
             cuda_mappings: Mutex::default(),
         }
@@ -481,16 +676,26 @@ impl Buffer {
         usage: vk::BufferUsageFlags,
         wanted: vk::MemoryPropertyFlags,
         preferred: vk::MemoryPropertyFlags,
-        exportable: bool,
+        handles: vk::ExternalMemoryHandleTypeFlags,
     ) -> Result<Self, DriverError> {
         let mut result = Self::empty(device);
         // Empty slices are legal in cudarc, and Vulkan has no empty buffers.
         if size == 0 {
             return Ok(result);
         }
+        // fail instead of letting the driver spill device memory to system RAM (like Cuda).
+        let too_big = Err(DriverError::Vulkan(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY));
+        if size > device.max_buffer {
+            return too_big;
+        }
         let vk_device = &device.device;
-        let handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
-        let export = exportable.then(|| export_support(device, usage)).flatten();
+        let export = export_support(device, usage, handles);
+        let handle = if export.is_some() {
+            handles
+        } else {
+            vk::ExternalMemoryHandleTypeFlags::empty()
+        };
+        result.dma_buf = handle.contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
         unsafe {
             let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
             let mut info = vk::BufferCreateInfo::default()
@@ -514,6 +719,12 @@ impl Buffer {
             });
             let memory_type =
                 device.memory_type(requirements.memory_type_bits, wanted, preferred)?;
+            let heap = device.memory.memory_types[memory_type as usize].heap_index;
+            if requirements.size > device.max_allocation
+                || requirements.size > device.memory.memory_heaps[heap as usize].size
+            {
+                return too_big;
+            }
             let mut flags = vk::MemoryAllocateFlagsInfo::default();
             if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
                 flags = flags.flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
@@ -547,14 +758,26 @@ impl Buffer {
 
     /// Device-local memory that kernels and copies can use, with undefined contents.
     pub(crate) fn device_local(device: &Arc<Device>, size: u64) -> Result<Arc<Self>, DriverError> {
+        // Exportable where the driver allows it, so `interop` can lend it to CUDA.
+        let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+        Self::device_local_exporting(device, size, opaque)
+    }
+
+    /// [`Self::device_local`], exportable with `handles` where the driver allows all of them.
+    pub(crate) fn device_local_exporting(
+        device: &Arc<Device>,
+        size: u64,
+        handles: vk::ExternalMemoryHandleTypeFlags,
+    ) -> Result<Arc<Self>, DriverError> {
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::TRANSFER_SRC
             | vk::BufferUsageFlags::TRANSFER_DST
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
         let local = vk::MemoryPropertyFlags::DEVICE_LOCAL;
         let none = vk::MemoryPropertyFlags::empty();
-        // Exportable where the driver allows it, so `interop` can lend it to CUDA.
-        Ok(Arc::new(Self::new(device, size, usage, local, none, true)?))
+        Ok(Arc::new(Self::new(
+            device, size, usage, local, none, handles,
+        )?))
     }
 
     /// Host-visible memory for moving data to or from the GPU.
@@ -568,7 +791,7 @@ impl Buffer {
             usage,
             host,
             vk::MemoryPropertyFlags::HOST_CACHED,
-            false,
+            vk::ExternalMemoryHandleTypeFlags::empty(),
         )?;
         if size > 0 {
             let flags = vk::MemoryMapFlags::empty();
@@ -714,13 +937,13 @@ mod tests {
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let none = vk::MemoryPropertyFlags::empty();
         let usage = vk::BufferUsageFlags::TRANSFER_DST;
-        let buffer = Buffer::new(&device, 4096, usage, host, none, true).unwrap();
+        let handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+        let buffer = Buffer::new(&device, 4096, usage, host, none, handle).unwrap();
         let Some(Dedicated(dedicated)) = buffer.export else {
             panic!("the driver has the extension, but can't export this buffer");
         };
         let vk_device = &device.device;
         let fd_functions = khr::external_memory_fd::Device::new(&device.instance, vk_device);
-        let handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
         unsafe {
             let info = vk::MemoryGetFdInfoKHR::default()
                 .memory(buffer.memory)
@@ -752,6 +975,29 @@ mod tests {
             vk_device.unmap_memory(buffer.memory);
             vk_device.free_memory(imported, None);
         }
+    }
+
+    /// Where the driver can export a dma-buf, a slice allocated for it exports one that covers it.
+    /// Other slices don't, so `as_image` can still bind their memory to any image.
+    #[cfg(feature = "cudarc")]
+    #[test]
+    fn device_memory_exports_as_dma_buf() {
+        use std::io::{Seek, SeekFrom};
+        let ctx = crate::driver::CudaContext::new(0).unwrap();
+        let stream = ctx.default_stream();
+        assert!(
+            stream
+                .alloc_zeros::<u8>(1000)
+                .unwrap()
+                .export_dma_buf()
+                .is_err()
+        );
+        let slice = stream.alloc_zeros_dma_buf::<u8>(1000).unwrap();
+        let fd = match slice.export_dma_buf() {
+            Err(DriverError::MissingFeature(_)) => return eprintln!("SKIPPED: no dma-buf export"),
+            fd => fd.unwrap(),
+        };
+        assert!(std::fs::File::from(fd).seek(SeekFrom::End(0)).unwrap() >= 1000);
     }
 
     #[test]

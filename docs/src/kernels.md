@@ -77,6 +77,9 @@ returns an error, so pick a smaller `block_dim` yourself.
 
 - **`shared_mem_bytes` is ignored.** A shader declares its shared memory at compile time.
 - **`f64`, 8-bit and 16-bit types** depend on optional GPU features. cudash enables all that the GPU has.
+- **Float atomics, cooperative matrix, `clock`, subgroup rotate** and a few more shader extensions are on
+  whenever the GPU has them. `load_module` returns `DriverError::MissingFeature` for a kernel that needs a
+  feature the GPU lacks.
 - **No `printf` or `assert`** in shaders. Write results to a buffer instead.
 - **No `get_global`,** so constant memory becomes a slice argument.
 - **Kernels can't take images,** which would need descriptor sets.

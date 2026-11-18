@@ -646,10 +646,36 @@ impl CudaStream {
         self: &Arc<Self>,
         len: usize,
     ) -> Result<CudaSlice<T>, DriverError> {
+        let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+        // SAFETY: the caller's contract.
+        unsafe { self.alloc_exporting(len, opaque) }
+    }
+
+    /// Allocates `len` zeroed elements that [`CudaSlice::export_dma_buf`] can export, where the
+    /// driver allows it.
+    #[cfg(feature = "cudarc")]
+    pub fn alloc_zeros_dma_buf<T: DeviceRepr + ValidAsZeroBits>(
+        self: &Arc<Self>,
+        len: usize,
+    ) -> Result<CudaSlice<T>, DriverError> {
+        let handles = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD
+            | vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+        // SAFETY: zeroed right below, and the stream keeps later reads in order.
+        let mut slice = unsafe { self.alloc_exporting(len, handles) }?;
+        self.memset_zeros(&mut slice)?;
+        Ok(slice)
+    }
+
+    /// [`Self::alloc`], with memory exportable as `handles` where the driver allows it.
+    unsafe fn alloc_exporting<T: DeviceRepr>(
+        self: &Arc<Self>,
+        len: usize,
+        handles: vk::ExternalMemoryHandleTypeFlags,
+    ) -> Result<CudaSlice<T>, DriverError> {
         let bytes = len
             .checked_mul(size_of::<T>())
             .ok_or(DriverError::Vulkan(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY))?;
-        let buffer = Buffer::device_local(self.device(), bytes as u64)?;
+        let buffer = Buffer::device_local_exporting(self.device(), bytes as u64, handles)?;
         static COUNT: AtomicUsize = AtomicUsize::new(0);
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let ty = std::any::type_name::<T>();

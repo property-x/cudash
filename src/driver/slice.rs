@@ -271,6 +271,28 @@ impl<T> CudaSlice<T> {
         self.buffer.buffer
     }
 
+    /// Exports the memory of a slice from [`CudaStream::alloc_zeros_dma_buf`] as a new dma-buf fd, so another device on the same GPU, such
+    /// as a compositor or UI renderer, can read it without a copy. The slice starts at offset 0
+    /// of the dma-buf. Order the reader against this slice's stream yourself, and keep the slice
+    /// alive while the dma-buf is in use.
+    #[cfg(feature = "cudarc")]
+    pub fn export_dma_buf(&self) -> Result<std::os::fd::OwnedFd, DriverError> {
+        use std::os::fd::FromRawFd;
+        if !self.buffer.dma_buf {
+            return Err(DriverError::MissingFeature(
+                "VK_EXT_external_memory_dma_buf",
+            ));
+        }
+        let device = &self.buffer.device;
+        let functions = ash::khr::external_memory_fd::Device::new(&device.instance, &device.device);
+        let info = vk::MemoryGetFdInfoKHR::default()
+            .memory(self.buffer.memory)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let fd = unsafe { functions.get_memory_fd(&info) }?;
+        // SAFETY: Vulkan transfers ownership of the returned fd to the caller.
+        Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    }
+
     pub fn as_view(&self) -> CudaView<'_, T> {
         CudaView {
             buffer: &self.buffer,

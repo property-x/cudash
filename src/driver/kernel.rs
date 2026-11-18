@@ -19,6 +19,7 @@ use super::{
     stream::CudaStream,
 };
 
+const OP_CAPABILITY: u32 = 17;
 const OP_ENTRY_POINT: u32 = 15;
 const OP_EXECUTION_MODE: u32 = 16;
 const OP_FUNCTION: u32 = 54;
@@ -68,6 +69,17 @@ impl CudaContext {
             return Err(DriverError::InvalidModule(
                 "shorter than a SPIR-V header".into(),
             ));
+        }
+        let unsupported = for_each_instruction(&words, |_, op, operands| {
+            let capability = (op == OP_CAPABILITY).then(|| operands[0])?;
+            self.device
+                .unsupported_capabilities
+                .iter()
+                .find(|&&(c, _)| c == capability)
+                .map(|&(_, feature)| feature)
+        })?;
+        if let Some(feature) = unsupported {
+            return Err(DriverError::MissingFeature(feature));
         }
         Ok(Arc::new(CudaModule {
             ctx: self.clone(),
@@ -444,7 +456,7 @@ mod tests {
             0,
             8,
             0,
-            (2 << 16) | 17, // one operand, which every real module starts with
+            (2 << 16) | OP_CAPABILITY, // one operand, which every real module starts with
             1,
             (5 << 16) | OP_ENTRY_POINT,
             EXECUTION_MODEL_GL_COMPUTE,
@@ -476,6 +488,22 @@ mod tests {
             with_block_dim(&module(), 6, (9, 8, 4)).unwrap()[15..],
             [1, 2, 3]
         );
+    }
+
+    #[test]
+    fn capabilities_the_gpu_lacks_are_errors() {
+        let ctx = CudaContext::new(0).unwrap();
+        let load = |words: &[u32]| {
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            ctx.load_module(Spirv::from_binary(bytes))
+        };
+        let mut words = module();
+        assert!(load(&words).is_ok());
+        let Some(&(capability, feature)) = ctx.device.unsupported_capabilities.first() else {
+            return; // a GPU with every feature has nothing to refuse
+        };
+        words[6] = capability;
+        assert!(matches!(load(&words), Err(DriverError::MissingFeature(f)) if f == feature));
     }
 
     #[test]
