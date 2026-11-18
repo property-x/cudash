@@ -959,6 +959,9 @@ impl CudaStream {
 
     /// Copies a slice or view to host memory, blocking until it's done.
     ///
+    /// A [`PinnedHostSlice`](super::PinnedHostSlice) is written by the GPU directly, and
+    /// this returns without waiting. Its accessors wait for the copy.
+    ///
     /// # Panics
     /// If `dst` is shorter than `src`.
     pub fn memcpy_dtoh<T: DeviceRepr, Src: DevicePtr<T>, Dst: HostSlice<T> + ?Sized>(
@@ -971,11 +974,25 @@ impl CudaStream {
         if bytes == 0 {
             return Ok(());
         }
+        let from = src.raw();
+        if let Some(pinned) = dst.pinned() {
+            let (reads, writes) = (&[from.buffer], &[pinned.buffer]);
+            return self
+                .copy(
+                    "memcpy_dtoh pinned",
+                    from,
+                    pinned,
+                    bytes,
+                    reads,
+                    writes,
+                    Vec::new(),
+                )
+                .map(drop);
+        }
         self.core.refuse_while_capturing("memcpy_dtoh")?;
-        let staging = Buffer::staging(self.device(), bytes)?;
-        staging.set_name(format_args!("memcpy_dtoh staging {}", Bytes(bytes)));
+        let (staging, size) = self.core.take_staging(bytes)?;
         let (from, to) = (
-            src.raw(),
+            from,
             RawRange {
                 buffer: &staging,
                 offset: 0,
@@ -997,6 +1014,7 @@ impl CudaStream {
             let raw = std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), bytes as usize);
             staging.read_bytes(raw);
         }
+        self.core.return_staging(staging, size);
         Ok(())
     }
 
@@ -1338,6 +1356,8 @@ mod tests {
             "the first was busy, so the second is new"
         );
         gate.open();
+        // So both are free when `clone_dtoh` below takes one from the same pool.
+        stream.synchronize().unwrap();
         assert_eq!(stream.clone_dtoh(&one).unwrap(), [1; 64]);
         assert_eq!(stream.clone_dtoh(&two).unwrap(), [2; 64]);
 
@@ -1394,6 +1414,34 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn dtoh_into_pinned_memory_returns_before_the_copy_and_pageable_reuses_staging() {
+        let ctx = CudaContext::new(0).unwrap();
+        let gate = Gate::new(&ctx);
+        let stream = gate.stream(&ctx);
+        let src = ctx.default_stream().clone_htod(&[7u32]).unwrap();
+        let mut back = unsafe { ctx.alloc_pinned::<u32>(1) }.unwrap();
+        // Would hang here, behind the gate, if it blocked.
+        stream.memcpy_dtoh(&src, &mut back).unwrap();
+        std::thread::scope(|scope| {
+            let read = scope.spawn(|| back.as_slice().unwrap()[0]);
+            sleep(Duration::from_millis(100));
+            assert!(!read.is_finished(), "read before the copy ran");
+            gate.open();
+            assert_eq!(read.join().unwrap(), 7);
+        });
+        assert!(
+            kept(&stream).is_empty(),
+            "staged instead of copying directly"
+        );
+
+        assert_eq!(stream.clone_dtoh(&src).unwrap(), [7]);
+        let first = kept(&stream);
+        assert_eq!(stream.clone_dtoh(&src).unwrap(), [7]);
+        assert_eq!(kept(&stream), first, "made a new staging buffer");
+        assert_eq!(first.len(), 1);
+    }
+
     /// Registers `data`, or returns false if this driver can't.
     fn register(ctx: &CudaContext, data: &[u8]) -> bool {
         match unsafe { ctx.host_register(data) } {
@@ -1414,10 +1462,13 @@ mod tests {
             return;
         }
         let mut dst = stream.alloc_zeros::<u8>(data.len()).unwrap();
+        // Read back into pinned memory, which doesn't stage either.
+        let mut back = unsafe { ctx.alloc_pinned::<u8>(data.len()) }.unwrap();
         for range in [0..data.len(), 17..5000, 4095..4097] {
             let mut view = dst.slice_mut(range.clone());
             stream.memcpy_htod(&data[range.clone()], &mut view).unwrap();
-            assert_eq!(stream.clone_dtoh(&view).unwrap(), data[range]);
+            stream.memcpy_dtoh(&view, &mut back).unwrap();
+            assert_eq!(back.as_slice().unwrap()[..range.len()], data[range]);
         }
         assert!(
             kept(&stream).is_empty(),

@@ -592,4 +592,23 @@ mod tests {
         drop(graph);
         stream.synchronize().unwrap();
     }
+
+    /// Each replay writes the pinned memory again, and its accessors wait for that replay.
+    #[test]
+    fn pinned_readback_is_captured() {
+        let ctx = CudaContext::new(0).unwrap();
+        let stream = ctx.new_stream().unwrap();
+        let mut data = stream.clone_htod(&[1u128]).unwrap();
+        let mut input = unsafe { ctx.alloc_pinned::<u128>(1) }.unwrap();
+        let mut back = unsafe { ctx.alloc_pinned::<u128>(1) }.unwrap();
+        stream.begin_capture(RELAXED).unwrap();
+        stream.memcpy_htod(&input, &mut data).unwrap();
+        stream.memcpy_dtoh(&data, &mut back).unwrap();
+        let graph = stream.end_capture(Flags(0)).unwrap().unwrap();
+        for value in [u128::MAX, 7] {
+            input.as_mut_slice().unwrap()[0] = value;
+            graph.launch().unwrap();
+            assert_eq!(back.as_slice().unwrap(), [value]);
+        }
+    }
 }

@@ -44,7 +44,8 @@ parts of a [mixed graph](#mixed-graphs).
 |---|---|
 | Kernel launches, `memcpy_dtod`, `clone_dtod`, `memset_zeros`, `alloc_zeros`, `device_ptr`, image copies | Recorded |
 | `memcpy_htod` from a `PinnedHostSlice` | Recorded. Each replay reads the pinned memory as it is then |
-| `memcpy_htod` from other host memory, `memcpy_dtoh`, `clone_dtoh`, `synchronize`, `frame`, `stop_frame`, launching another graph | Returns `DriverError::StreamCapture`, and invalidates the capture |
+| `memcpy_dtoh` into a `PinnedHostSlice` | Recorded. Each replay writes the pinned memory, and its accessors wait for the latest replay |
+| `memcpy_htod` from other host memory, `memcpy_dtoh` into other host memory, `clone_dtoh`, `synchronize`, `frame`, `stop_frame`, launching another graph | Returns `DriverError::StreamCapture`, and invalidates the capture |
 | A second `begin_capture` on the same stream | Returns `DriverError::StreamCapture` |
 
 As in CUDA, a call that can't be captured invalidates the capture: later calls on the stream return errors until

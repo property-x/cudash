@@ -36,7 +36,7 @@ a slice with work still queued is safe.
 | Call | Direction | Returns |
 |---|---|---|
 | `clone_htod(&src)`, `memcpy_htod(&src, &mut dst)` | Host to device | At once. The data is copied on the CPU first, so `src` is free to change, except for [registered memory](#host-memory-without-staging) |
-| `clone_dtoh(&src)`, `memcpy_dtoh(&src, &mut dst)` | Device to host | When the copy has finished |
+| `clone_dtoh(&src)`, `memcpy_dtoh(&src, &mut dst)` | Device to host | When the copy has finished. Into [pinned memory](#host-memory-without-staging), at once |
 | `clone_dtod(&src)`, `memcpy_dtod(&src, &mut dst)` | Device to device | At once |
 | `memset_zeros(&mut dst)` | Fill with zeros | At once |
 
@@ -71,11 +71,13 @@ assert!(buf.try_slice(4..20).is_none());
 
 ## Host memory without staging
 
-`memcpy_htod` normally copies through a staging buffer, which costs a CPU copy. Two kinds of host memory skip it:
+`memcpy_htod` and `memcpy_dtoh` normally copy through a staging buffer, which costs a CPU copy. Two kinds of host
+memory skip it:
 
 - **Pinned memory,** `ctx.alloc_pinned::<T>(len)`, returns a `PinnedHostSlice<T>`, as in cudarc. Copies read and
-  write it directly. Its accessors (`as_slice`, `as_mut_slice`, `as_ptr`, `as_mut_ptr`) wait for copies that use it,
-  so they never see one half done.
+  write it directly, and return without waiting. Its accessors (`as_slice`, `as_mut_slice`, `as_ptr`, `as_mut_ptr`)
+  wait for copies that use it, so they never see one half done. That makes it the cheapest way to read a small
+  result back: `memcpy_dtoh` into it, then `as_slice`, waits for that copy only.
 - **Registered memory,** `unsafe { ctx.host_register(&data) }`, imports existing host memory, like CUDA's
   `cuMemHostRegister` (cudarc only has that in `sys`). Copies from inside it return without copying on the CPU, and
   read the memory when the GPU gets to them, so don't write it while a copy may be running: synchronize the stream
