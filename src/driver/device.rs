@@ -146,8 +146,8 @@ fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError
 fn available_extensions(
     instance: &crate::ash::Instance,
     pd: vk::PhysicalDevice,
-) -> Vec<&'static CStr> {
-    let have = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
+) -> Result<Vec<&'static CStr>, DriverError> {
+    let have = unsafe { instance.enumerate_device_extension_properties(pd) }?;
     let mut wanted = vec![
         ext::external_memory_host::NAME,
         c"VK_KHR_portability_subset",
@@ -158,11 +158,36 @@ fn available_extensions(
     wanted.extend(OPTIONAL_EXTENSIONS);
     #[cfg(feature = "cuda")]
     wanted.extend(crate::interop::EXPORT_EXTENSIONS);
-    // For `GpuSlice::export_dma_buf`, which also needs `VK_KHR_external_memory_fd` from above.
+    // For `GpuSlice::export_dma_buf`.
     #[cfg(feature = "cuda")]
     wanted.push(ext::external_memory_dma_buf::NAME);
     wanted.retain(|name| have.iter().any(|e| e.extension_name_as_c_str() == Ok(name)));
-    wanted
+    #[cfg(feature = "cuda")]
+    let own = [(
+        ext::external_memory_dma_buf::NAME,
+        khr::external_memory_fd::NAME,
+    )];
+    #[cfg(not(feature = "cuda"))]
+    let own = [];
+    let requires: Vec<_> = OPTIONAL_REQUIRES.concat().into_iter().chain(own).collect();
+    Ok(drop_unmet(wanted, &requires))
+}
+
+/// Drops each extension whose required extension isn't in `extensions`, including ones that
+/// become unmet by an earlier drop. Enabling one without what it needs makes `vkCreateDevice`
+/// invalid.
+fn drop_unmet(
+    mut extensions: Vec<&'static CStr>,
+    requires: &[(&CStr, &CStr)],
+) -> Vec<&'static CStr> {
+    while let Some(unmet) = extensions.iter().position(|name| {
+        requires
+            .iter()
+            .any(|(extension, required)| extension == name && !extensions.contains(required))
+    }) {
+        extensions.remove(unmet);
+    }
+    extensions
 }
 
 fn compute_queue_family(instance: &crate::ash::Instance, pd: vk::PhysicalDevice) -> Option<u32> {
@@ -222,10 +247,15 @@ mod spirv_capability {
 /// `OPTIONAL_EXTENSIONS`, and `OptionalFeatures` with one feature struct per extension.
 macro_rules! optional_extensions {
     ($($(#[$meta:meta])* $name:literal => $features:ident {
+        $(requires: [$($required:literal),* $(,)?],)?
         capabilities: [$($capability:ident($id:literal): [$($bit:ident),* $(,)?]),* $(,)?],
         off: [$($off:ident),* $(,)?] $(,)?
     }),* $(,)?) => {
         const OPTIONAL_EXTENSIONS: &[&CStr] = &[$($(#[$meta])* $name),*];
+
+        /// `(extension, extension it needs)` for each entry's `requires`.
+        const OPTIONAL_REQUIRES: &[&[(&CStr, &CStr)]] =
+            &[$($(#[$meta])* &[$($(($name, $required)),*)?]),*];
 
         #[allow(non_snake_case)]
         #[derive(Default)]
@@ -370,7 +400,7 @@ impl Device {
         let pd = *devices
             .get(ordinal)
             .ok_or(DriverError::NoSuchDevice(ordinal))?;
-        let extensions = available_extensions(instance, pd);
+        let extensions = available_extensions(instance, pd)?;
         let (device, queue_family, physical_device, frame_boundary, unsupported_capabilities) =
             unsafe { Self::create(instance, pd, &extensions) }?;
         unsafe {
@@ -922,6 +952,26 @@ impl Drop for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extensions_missing_a_requirement_are_dropped() {
+        let (a, b, c) = (c"VK_A", c"VK_B", c"VK_C");
+        // c needs b, which needs a missing extension, so both go; a needs nothing.
+        let requires = [(b, c"VK_MISSING"), (c, b)];
+        assert_eq!(drop_unmet(vec![a, b, c], &requires), vec![a]);
+        assert_eq!(drop_unmet(vec![a, c], &[]), vec![a, c]);
+    }
+
+    /// Every `requires` names an extension cudash asks for, so the check can be met.
+    #[test]
+    fn requirements_are_extensions_cudash_wants() {
+        for (extension, required) in OPTIONAL_REQUIRES.concat() {
+            assert!(
+                OPTIONAL_EXTENSIONS.contains(&required),
+                "{extension:?} needs {required:?}"
+            );
+        }
+    }
 
     /// Free memory goes down by about the size of a large allocation. Other processes change it
     /// too, so the check allows a quarter of the allocation as slack.

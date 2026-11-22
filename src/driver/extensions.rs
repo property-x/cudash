@@ -1,6 +1,8 @@
 // Optional shader extensions cudash enables when the GPU has them, included by `device.rs`.
 //
 // <extension> => <ash feature struct> {  enabled with every bit the GPU reports
+//     requires: [<extension>, ...],  optional; the entry is dropped when one of them isn't enabled.
+//         Only what Vulkan 1.3 doesn't already include, from `depends` in Khronos's `vk.xml`.
 //     capabilities: [<SPIR-V capability>(<number>): [<feature bit>, ...]],
 //         `load_module` refuses a kernel declaring the capability unless one of the bits is on.
 //         Numbers are from Khronos's `spirv.core.grammar.json`; a test in `device.rs` checks them.
@@ -32,6 +34,7 @@ optional_extensions! {
 
     // fp16 atomic add, and float atomic min/max, as CUDA's atomicMin/atomicMax on floats. (cost: none)
     c"VK_EXT_shader_atomic_float2" => PhysicalDeviceShaderAtomicFloat2FeaturesEXT {
+        requires: [c"VK_EXT_shader_atomic_float"],
         capabilities: [
             AtomicFloat16AddEXT(6095): [
                 shader_buffer_float16_atomic_add,
@@ -102,8 +105,8 @@ optional_extensions! {
     },
 
     // Operations across the 4 threads of a quad, and branches they take together. (cost: none)
-    // Needs VK_KHR_shader_maximal_reconvergence above. 
     c"VK_KHR_shader_quad_control" => PhysicalDeviceShaderQuadControlFeaturesKHR {
+        requires: [c"VK_KHR_shader_maximal_reconvergence"],
         capabilities: [QuadControlKHR(5087): [shader_quad_control]],
         off: [],
     },
@@ -163,9 +166,10 @@ optional_extensions! {
     },
 
     // Workgroup-wide and flexibly sized cooperative matrices, with reductions, conversions and
-    // tensor loads. Needs VK_KHR_cooperative_matrix above. NVIDIA only. (cost: none)
+    // tensor loads. NVIDIA only. (cost: none)
     #[cfg(feature = "ash_latest")]
     c"VK_NV_cooperative_matrix2" => PhysicalDeviceCooperativeMatrix2FeaturesNV {
+        requires: [c"VK_KHR_cooperative_matrix"],
         capabilities: [
             CooperativeMatrixReductionsNV(5430): [cooperative_matrix_reductions],
             CooperativeMatrixConversionsNV(5431): [cooperative_matrix_conversions],
