@@ -37,7 +37,7 @@ impl Eq for GpuContext {}
 impl GpuContext {
     /// Creates a context on the GPU with this ordinal. Discrete GPUs come first.
     ///
-    /// Requires Vulkan 1.3.
+    /// Requires Vulkan 1.3 and `VK_KHR_maintenance5`.
     pub fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
         let device = Device::new(ordinal)?;
         let default_core = StreamCore::new(&device, None, "default_stream")?;

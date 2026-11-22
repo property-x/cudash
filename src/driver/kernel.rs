@@ -9,6 +9,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(feature = "ash_latest")]
+use crate::compat::PushNext as _;
 use crate::{
     ash::{khr, vk},
     compat::load_ext,
@@ -373,22 +375,19 @@ impl FunctionInner {
     ) -> Result<vk::Pipeline, DriverError> {
         let device = &self.device.device;
         let code = with_block_dim(&self.words, self.entry, block_dim)?;
+        let name = self.name.to_string_lossy();
+        let mut code_info = vk::ShaderModuleCreateInfo::default().code(&code);
         let pipeline = unsafe {
-            let info = vk::ShaderModuleCreateInfo::default().code(&code);
-            let module = device.create_shader_module(&info, None)?;
-            let name = self.name.to_string_lossy();
-            self.device
-                .set_name(module, format_args!("{name} block {block_dim:?}"));
+            // maintenance5: the pipeline takes the code itself, without a module object.
             let stage = vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::COMPUTE)
-                .module(module)
-                .name(&self.name);
+                .name(&self.name)
+                .push_next(&mut code_info);
             let info = [vk::ComputePipelineCreateInfo::default()
                 .flags(flags)
                 .stage(stage)
                 .layout(self.layout)];
             let created = device.create_compute_pipelines(vk::PipelineCache::null(), &info, None);
-            device.destroy_shader_module(module, None);
             let pipeline = created.map_err(|(_, e)| e)?[0];
             self.device
                 .set_name(pipeline, format_args!("{name} block {block_dim:?}"));

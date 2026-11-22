@@ -50,7 +50,7 @@ The guide in `docs/` covers every feature in detail. Build it with `just docs`.
 It should work on any system given these limitations:
 
 * Unix (`fd` handles).
-* Vulkan 1.3+ capable GPUs -- _almost_ 1.2 capable (only `queue_submit2`).
+* Vulkan 1.3+ capable GPUs with `VK_KHR_maintenance5` (core in 1.4).
 * interop needs Cuda capable hardware.
 
 ## Kernels

@@ -2,7 +2,7 @@
 
 cudash is [cudarc](https://github.com/chelsea0x3b/cudarc)'s basic driver API, implemented on Vulkan with
 [ash](https://github.com/ash-project/ash). Code written against `cudarc::driver` runs on any GPU with a Vulkan 1.3
-driver, with no CUDA installed. For code that only uses memory and copies, changing the import is enough:
+driver (plus `VK_KHR_maintenance5`, core in 1.4), with no CUDA installed. For code that only uses memory and copies, changing the import is enough:
 
 ```rust
 use cudash::cudarc_compat::*; // was: use cudarc::driver::*;

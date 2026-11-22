@@ -184,6 +184,8 @@ fn available_extensions(
 ) -> Result<Vec<&'static CStr>, DriverError> {
     let have = unsafe { instance.enumerate_device_extension_properties(pd) }?;
     let mut wanted = vec![
+        // Required, checked in `Device::create`.
+        khr::maintenance5::NAME,
         ext::external_memory_host::NAME,
         c"VK_KHR_portability_subset",
         ext::frame_boundary::NAME,
@@ -521,6 +523,13 @@ impl Device {
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
             let mut frame_boundary = vk::PhysicalDeviceFrameBoundaryFeaturesEXT::default();
+            // Pipelines take the SPIR-V directly. Core in Vulkan 1.4, and MoltenVK has it
+            // since 1.4.0; the spec makes the feature supported wherever the extension is.
+            if !extensions.contains(&khr::maintenance5::NAME) {
+                return Err(DriverError::MissingFeature("VK_KHR_maintenance5"));
+            }
+            let mut maintenance5 =
+                vk::PhysicalDeviceMaintenance5FeaturesKHR::default().maintenance5(true);
             let mut optional = OptionalFeatures::default();
             // Builds the same chain twice, to query and then to enable, so it clears each
             // `p_next` the query left behind.
@@ -531,13 +540,15 @@ impl Device {
                         &mut v12.p_next,
                         &mut v13.p_next,
                         &mut frame_boundary.p_next,
+                        &mut maintenance5.p_next,
                     ] {
                         *p_next = std::ptr::null_mut();
                     }
                     let mut features = $features
                         .push_next(&mut v11)
                         .push_next(&mut v12)
-                        .push_next(&mut v13);
+                        .push_next(&mut v13)
+                        .push_next(&mut maintenance5);
                     if extensions.contains(&ext::frame_boundary::NAME) {
                         features = features.push_next(&mut frame_boundary);
                     }
