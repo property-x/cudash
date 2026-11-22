@@ -10,7 +10,8 @@ use cudash::driver::*;
 
 # fn main() -> Result<(), DriverError> {
 let ctx = CudaContext::new(0)?;
-println!("{} with {} bytes", ctx.name()?, ctx.total_mem()?);
+let (free, total) = ctx.mem_get_info()?;
+println!("{}: {free} of {total} bytes free", ctx.name()?);
 let stream = ctx.default_stream();
 
 let zeros = stream.alloc_zeros::<f32>(1024)?;      // zeroed on the GPU

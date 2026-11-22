@@ -152,6 +152,8 @@ fn available_extensions(
         ext::external_memory_host::NAME,
         c"VK_KHR_portability_subset",
         ext::frame_boundary::NAME,
+        // Free memory per heap, for `mem_get_info`.
+        ext::memory_budget::NAME,
     ];
     wanted.extend(OPTIONAL_EXTENSIONS);
     #[cfg(feature = "cudarc")]
@@ -511,13 +513,39 @@ impl Device {
     }
 
     pub(crate) fn total_mem(&self) -> usize {
+        self.largest_device_local_heap()
+            .map_or(0, |(_, size)| size as usize)
+    }
+
+    /// Index and size of the largest device-local heap.
+    fn largest_device_local_heap(&self) -> Option<(usize, u64)> {
         let heaps = &self.memory.memory_heaps[..self.memory.memory_heap_count as usize];
         heaps
             .iter()
-            .filter(|heap| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
-            .map(|heap| heap.size as usize)
-            .max()
-            .unwrap_or(0)
+            .enumerate()
+            .filter(|(_, heap)| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+            .map(|(index, heap)| (index, heap.size))
+            .max_by_key(|&(_, size)| size)
+    }
+
+    /// `(free, total)` bytes of the heap [`Self::total_mem`] reports. Free is the driver's budget
+    /// for this process minus what it uses, which counts other processes too. Without
+    /// `VK_EXT_memory_budget`, free is the whole heap.
+    pub(crate) fn mem_get_info(&self) -> (usize, usize) {
+        let Some((index, total)) = self.largest_device_local_heap() else {
+            return (0, 0);
+        };
+        if !self.extensions.contains(&ext::memory_budget::NAME) {
+            return (total as usize, total as usize);
+        }
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+        unsafe {
+            self.instance
+                .get_physical_device_memory_properties2(self.physical_device, &mut properties)
+        };
+        let free = budget.heap_budget[index].saturating_sub(budget.heap_usage[index]);
+        (free.min(total) as usize, total as usize)
     }
 
     pub(crate) fn memory_type(
@@ -894,6 +922,28 @@ impl Drop for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Free memory goes down by about the size of a large allocation. Other processes change it
+    /// too, so the check allows a quarter of the allocation as slack. 64 MiB, since lavapipe
+    /// refuses device-local allocations of 128 MiB and more here.
+    #[test]
+    fn mem_get_info_sees_an_allocation() {
+        let device = Device::new(0).unwrap();
+        let (free, total) = device.mem_get_info();
+        assert_eq!(total, device.total_mem());
+        assert!(free <= total);
+        if !device.extensions.contains(&ext::memory_budget::NAME) {
+            assert_eq!(free, total);
+            return;
+        }
+        let bytes = (64 << 20).min(free / 2);
+        let _buffer = Buffer::device_local(&device, bytes as u64).unwrap();
+        let (after, _) = device.mem_get_info();
+        assert!(
+            after + bytes * 3 / 4 <= free,
+            "free {free} -> {after} after {bytes} bytes"
+        );
+    }
 
     #[test]
     fn robustness_and_capture_replay_stay_off() {

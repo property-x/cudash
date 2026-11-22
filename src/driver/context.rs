@@ -70,6 +70,12 @@ impl CudaContext {
         Ok(self.device.total_mem())
     }
 
+    /// `(free, total)` bytes of the heap [`Self::total_mem`] reports, like `cuMemGetInfo`. Free
+    /// comes from `VK_EXT_memory_budget`; without it, free is the whole heap.
+    pub fn mem_get_info(&self) -> Result<(usize, usize), DriverError> {
+        Ok(self.device.mem_get_info())
+    }
+
     /// The context's shared default stream. All handles run on the same stream.
     pub fn default_stream(self: &Arc<Self>) -> Arc<CudaStream> {
         CudaStream::new(self, self.default_core.clone())
