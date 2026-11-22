@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Free GitHub-hosted runners only, with no GPU. Each job runs in ubuntu:26.04, the release the dev box uses,
+# so Mesa and the Vulkan layers match. `just setup` installs the rest, as it does on the dev box.
+env:
+  CARGO_TERM_COLOR: always
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  checks:
+    name: lint and check
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    steps:
+      - name: Install just, git and rustup
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git just
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: Install system packages and toolchains
+        run: just setup
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: checks-${{ hashFiles('Cargo.lock') }}
+      - name: Lint
+        run: just lint
+      - name: Check
+        run: just check
+
+  # Runs the whole suite on lavapipe (Mesa's software Vulkan driver) under the validation layers.
+  # Any validation error fails the job. See `just test-lavapipe`.
+  test:
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    steps:
+      - name: Install just, git and rustup
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git just
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: Install system packages and toolchains
+        run: just setup
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ hashFiles('Cargo.lock') }}
+      - name: Test on lavapipe under validation
+        run: just test-lavapipe

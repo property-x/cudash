@@ -14,14 +14,15 @@ setup:
         echo "Install Rust first: https://rustup.rs" >&2
         exit 1
     fi
-    rustup component add rustfmt clippy
-    rustup toolchain install nightly --component rustfmt
-    # Ubuntu's mdbook is 0.4.x, and 0.5 is current. cargo skips the build when this version is already installed.
-    cargo install --locked mdbook --version 0.5.4
     # libnvrtc12 is in Ubuntu's multiverse repository, and doesn't need an NVIDIA GPU.
     $sudo apt-get update
     $sudo apt-get install -y build-essential slang-compiler libnvrtc12 mesa-vulkan-drivers \
         vulkan-tools vulkan-validationlayers spirv-tools
+    # After apt: cargo install links with cc, which a fresh ubuntu:26.04 doesn't have until build-essential is installed
+    rustup component add rustfmt clippy
+    rustup toolchain install nightly --component rustfmt
+    # Ubuntu's mdbook is 0.4.x, and 0.5 is current. cargo skips the build when this version is already installed.
+    cargo install --locked mdbook --version 0.5.4
     # Slang looks for the unversioned library name, which the package doesn't provide.
     $sudo ln -sf libnvrtc.so.12 /usr/lib/x86_64-linux-gnu/libnvrtc.so
     $sudo ldconfig
@@ -133,15 +134,29 @@ test *filter:
 validate:
     #!/usr/bin/env bash
     set -euo pipefail
-    log=$(VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
-        cargo test -- --test-threads=1 --nocapture)
-    errors=$(grep -c 'Validation Error' <<<"$log" || true)
+    log=$(mktemp)
+    trap 'rm -f "$log"' EXIT
+    # The layer may print to stderr, so keep both streams. pipefail makes a failing test fail the recipe.
+    VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
+        cargo test --no-fail-fast -- --test-threads=1 --nocapture 2>&1 | tee "$log"
+    errors=$(grep -c 'Validation Error' "$log" || true)
     if [ "$errors" != 0 ]; then
-        grep -A8 'Validation Error' <<<"$log"
+        grep -A8 'Validation Error' "$log"
         echo "$errors validation errors" >&2
         exit 1
     fi
     echo "no validation errors"
+
+# Run the tests on lavapipe (Mesa's software Vulkan driver, no GPU needed) under validation. Used by CI
+test-lavapipe:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    icd=/usr/share/vulkan/icd.d/lvp_icd.json
+    if [ ! -f "$icd" ]; then
+        echo "No lavapipe at $icd. Run just setup" >&2
+        exit 1
+    fi
+    VK_DRIVER_FILES="$icd" just validate
 
 # Run everything that needs real CUDA, failing rather than skipping. Needs an NVIDIA GPU
 test-nvidia:
