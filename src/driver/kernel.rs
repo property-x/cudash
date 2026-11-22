@@ -9,7 +9,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::ash::vk;
+use crate::{
+    ash::{khr, vk},
+    compat::load_ext,
+};
 
 use super::{
     DriverError,
@@ -197,6 +200,127 @@ pub struct GpuFunction {
     inner: Arc<FunctionInner>,
 }
 
+impl GpuFunction {
+    /// What the driver reports about this kernel compiled for `block_dim`, such as registers,
+    /// spills and code size, like `ptxas -v`. Names and meanings depend on the driver.
+    /// Compiles a separate pipeline to collect them, so it costs a compile and doesn't touch launches.
+    pub fn statistics(
+        &self,
+        block_dim: (u32, u32, u32),
+    ) -> Result<Vec<KernelStatistic>, DriverError> {
+        let inner = &self.inner;
+        let device = &inner.device;
+        if !device
+            .extensions
+            .contains(&khr::pipeline_executable_properties::NAME)
+        {
+            return Err(DriverError::MissingFeature("pipelineExecutableInfo"));
+        }
+        let pipeline =
+            inner.create_pipeline(block_dim, vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR)?;
+        let functions = load_ext!(
+            khr::pipeline_executable_properties::Device,
+            &device.instance,
+            &device.device
+        );
+        let fp = functions.fp();
+        let result = unsafe {
+            let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
+            read_all(|count, data| {
+                (fp.get_pipeline_executable_properties_khr)(
+                    device.device.handle(),
+                    &info,
+                    count,
+                    data,
+                )
+            })
+            .and_then(|executables| {
+                let mut all = Vec::new();
+                for index in 0..executables.len() as u32 {
+                    let info = vk::PipelineExecutableInfoKHR::default()
+                        .pipeline(pipeline)
+                        .executable_index(index);
+                    let statistics: Vec<vk::PipelineExecutableStatisticKHR> =
+                        read_all(|count, data| {
+                            (fp.get_pipeline_executable_statistics_khr)(
+                                device.device.handle(),
+                                &info,
+                                count,
+                                data,
+                            )
+                        })?;
+                    all.extend(statistics.iter().map(KernelStatistic::from));
+                }
+                Ok(all)
+            })
+        };
+        unsafe { device.device.destroy_pipeline(pipeline, None) };
+        Ok(result?)
+    }
+}
+
+/// One statistic from [`GpuFunction::statistics`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct KernelStatistic {
+    pub name: String,
+    pub description: String,
+    pub value: StatisticValue,
+}
+
+/// A [`KernelStatistic`]'s value, in the format the driver reports.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StatisticValue {
+    Bool(bool),
+    I64(i64),
+    U64(u64),
+    F64(f64),
+}
+
+impl From<&vk::PipelineExecutableStatisticKHR<'_>> for KernelStatistic {
+    fn from(statistic: &vk::PipelineExecutableStatisticKHR<'_>) -> Self {
+        let text = |chars: &[std::ffi::c_char]| {
+            let bytes: Vec<u8> = chars
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        // SAFETY: `format` says which union field the driver wrote.
+        let value = unsafe {
+            match statistic.format {
+                vk::PipelineExecutableStatisticFormatKHR::BOOL32 => {
+                    StatisticValue::Bool(statistic.value.b32 != 0)
+                }
+                vk::PipelineExecutableStatisticFormatKHR::INT64 => {
+                    StatisticValue::I64(statistic.value.i64)
+                }
+                vk::PipelineExecutableStatisticFormatKHR::FLOAT64 => {
+                    StatisticValue::F64(statistic.value.f64)
+                }
+                _ => StatisticValue::U64(statistic.value.u64),
+            }
+        };
+        Self {
+            name: text(&statistic.name),
+            description: text(&statistic.description),
+            value,
+        }
+    }
+}
+
+/// Vulkan's two-call pattern: ask for the count, then fill that many default structs.
+unsafe fn read_all<T: Default + Clone>(
+    mut call: impl FnMut(*mut u32, *mut T) -> vk::Result,
+) -> Result<Vec<T>, vk::Result> {
+    let mut count = 0;
+    call(&mut count, std::ptr::null_mut()).result()?;
+    let mut items = vec![T::default(); count as usize];
+    call(&mut count, items.as_mut_ptr()).result()?;
+    items.truncate(count as usize);
+    Ok(items)
+}
+
 impl std::fmt::Debug for GpuFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GpuFunction")
@@ -237,6 +361,16 @@ impl FunctionInner {
         if let Some(&pipeline) = pipelines.get(&block_dim) {
             return Ok(pipeline);
         }
+        let pipeline = self.create_pipeline(block_dim, vk::PipelineCreateFlags::empty())?;
+        pipelines.insert(block_dim, pipeline);
+        Ok(pipeline)
+    }
+
+    fn create_pipeline(
+        &self,
+        block_dim: (u32, u32, u32),
+        flags: vk::PipelineCreateFlags,
+    ) -> Result<vk::Pipeline, DriverError> {
         let device = &self.device.device;
         let code = with_block_dim(&self.words, self.entry, block_dim)?;
         let pipeline = unsafe {
@@ -250,6 +384,7 @@ impl FunctionInner {
                 .module(module)
                 .name(&self.name);
             let info = [vk::ComputePipelineCreateInfo::default()
+                .flags(flags)
                 .stage(stage)
                 .layout(self.layout)];
             let created = device.create_compute_pipelines(vk::PipelineCache::null(), &info, None);
@@ -259,7 +394,6 @@ impl FunctionInner {
                 .set_name(pipeline, format_args!("{name} block {block_dim:?}"));
             pipeline
         };
-        pipelines.insert(block_dim, pipeline);
         Ok(pipeline)
     }
 }
@@ -516,6 +650,27 @@ mod tests {
         };
         words[6] = capability;
         assert!(matches!(load(&words), Err(DriverError::MissingFeature(f)) if f == feature));
+    }
+
+    /// A real kernel has statistics where the driver reports them, and the pipeline used for
+    /// them isn't kept for launches.
+    #[test]
+    fn statistics_describe_a_kernel_or_name_the_missing_feature() {
+        let ctx = GpuContext::new(0).unwrap();
+        let spirv = include_bytes!(concat!(env!("OUT_DIR"), "/double_all.spv"));
+        let module = ctx.load_module(Spirv::from_binary(&spirv[..])).unwrap();
+        let function = module.load_function("double_all").unwrap();
+        match function.statistics((64, 1, 1)) {
+            Ok(statistics) => {
+                assert!(!statistics.is_empty());
+                assert!(statistics.iter().all(|s| !s.name.is_empty()));
+            }
+            Err(error) => assert!(matches!(
+                error,
+                DriverError::MissingFeature("pipelineExecutableInfo")
+            )),
+        }
+        assert!(function.inner.pipelines.lock().unwrap().is_empty());
     }
 
     #[test]

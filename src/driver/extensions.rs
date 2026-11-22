@@ -111,6 +111,13 @@ optional_extensions! {
         off: [],
     },
 
+    // Register, spill and code-size statistics per kernel, for `GpuFunction::statistics`. Only
+    // pipelines created with `CAPTURE_STATISTICS` collect them, and launches don't. (cost: none)
+    c"VK_KHR_pipeline_executable_properties" => PhysicalDevicePipelineExecutablePropertiesFeaturesKHR {
+        capabilities: [],
+        off: [],
+    },
+
     // Atomic add, min and max on __half2 vectors, as CUDA's atomicAdd(__half2*). NVIDIA only. (cost: none)
     c"VK_NV_shader_atomic_float16_vector" => PhysicalDeviceShaderAtomicFloat16VectorFeaturesNV {
         capabilities: [AtomicFloat16VectorNV(5404): [shader_float16_vector_atomics]],

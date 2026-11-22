@@ -282,6 +282,28 @@ Feature: Optional shader extensions in cudash::driver
     When I launch "double" on "a" with n 1024
     Then the buffer "a" holds 3 in every element
 
+  # ---- What the context reports ----------------------------------------------------------
+
+  @vulkan
+  Scenario: Enabled extensions are ones the GPU reports, with no duplicates
+    Then every enabled extension is one the GPU reports, once
+
+  @vulkan
+  Scenario: Every optional extension the GPU reports is enabled when its requirements are
+    Then every optional extension the GPU reports with its requirements is enabled
+
+  @vulkan
+  Scenario: An enabled extension has its requirement enabled
+    Then every enabled extension has its requirement enabled
+
+  @vulkan
+  Scenario: A GPU feature a tag relies on means its extension is enabled
+    Then the feature tags agree with the enabled extensions
+
+  @vulkan
+  Scenario: The caps example runs
+    Then the caps example exits successfully
+
   # ---- Malformed modules -----------------------------------------------------------------
 
   @vulkan

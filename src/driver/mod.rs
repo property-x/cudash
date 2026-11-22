@@ -37,7 +37,10 @@ pub use error::DriverError;
 pub use graph::GpuGraph;
 pub use host::PinnedHostSlice;
 pub use image::{GpuImage, ImageFormat};
-pub use kernel::{GpuFunction, GpuModule, LaunchArgs, LaunchConfig, PushKernelArg, Spirv};
+pub use kernel::{
+    GpuFunction, GpuModule, KernelStatistic, LaunchArgs, LaunchConfig, PushKernelArg, Spirv,
+    StatisticValue,
+};
 pub use slice::{
     DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice, GpuSlice, GpuView, GpuViewMut, HostSlice,
     RawRange, ValidAsZeroBits,
