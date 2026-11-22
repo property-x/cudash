@@ -11,7 +11,10 @@
 
 mod steps;
 
-use cucumber::World as _;
+use cucumber::{
+    World as _,
+    writer::{Basic, Coloring, Ext as _, Verbosity},
+};
 use steps::World;
 
 #[tokio::main]
@@ -40,8 +43,18 @@ async fn main() {
         }
     };
 
+    // cucumber colours only on a terminal; CI logs aren't one, so force it there or on request.
+    let on = |k: &str, v: &str| std::env::var(k).is_ok_and(|x| x == v);
+    let colour =
+        if on("CI", "true") || on("GITHUB_ACTIONS", "true") || on("CARGO_TERM_COLOR", "always") {
+            Coloring::Always
+        } else {
+            Coloring::Auto
+        };
+
     // `with_default_cli` stops cucumber parsing the arguments itself, which would reject these.
     World::cucumber()
+        .with_writer(Basic::new(std::io::stdout(), colour, Verbosity::Default).summarized())
         .with_default_cli()
         .max_concurrent_scenarios(threads.filter(|&n| n > 0).unwrap_or(1))
         .filter_run_and_exit("features", move |feature, rule, scenario| {

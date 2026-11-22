@@ -154,11 +154,10 @@ validate:
     trap 'rm -f "$log"' EXIT
     # Build first, so the quiet flag hides the compile lines and the log holds only the test run
     cargo {{quiet}} test --no-fail-fast --no-run
-    # The output goes through tee, so it isn't a terminal: force colour. CLICOLOR_FORCE does it for cucumber,
-    # which reads that variable rather than --color. The flag must be one argument: the features runner
-    # would take a separate "always" as a test filter. The layer may print to stderr, so keep both streams.
-    # pipefail makes a failing test fail the recipe.
-    CARGO_TERM_COLOR=always CLICOLOR_FORCE=1 VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
+    # The output goes through tee, so it isn't a terminal: force colour for cargo and libtest. The flag must be one
+    # argument: the features runner would take a separate "always" as a test filter. The layer may print to stderr,
+    # so keep both streams. pipefail makes a failing test fail the recipe.
+    CARGO_TERM_COLOR=always VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
         cargo test --no-fail-fast -- --test-threads=1 --nocapture --color=always 2>&1 | tee "$log"
     errors=$(grep -c 'Validation Error' "$log" || true)
     if [ "$errors" != 0 ]; then
