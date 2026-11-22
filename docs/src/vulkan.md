@@ -17,7 +17,7 @@ cudash streams yourself, for example by calling `stream.synchronize()` first.
 
 When the instance has `VK_EXT_debug_utils`, which validation layers and capture tools add, every operation carries a
 label such as `memcpy_htod 22.1 MB` or `launch double_all grid (1, 1, 1) block (1024, 1, 1)`. Vulkan objects are
-named after the code that made them: `CudaSlice<f32> 3 len 1024`, `default_stream 0`, `CudaImage<f32> 0 64x32`.
+named after the code that made them: `GpuSlice<f32> 3 len 1024`, `default_stream 0`, `GpuImage<f32> 0 64x32`.
 Debuggers and profilers show these names.
 
 ## RenderDoc

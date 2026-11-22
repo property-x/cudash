@@ -9,7 +9,7 @@ use cudash::driver::*;
 const KERNEL: &str = concat!(env!("OUT_DIR"), "/kernel.spv");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     let module = ctx.load_module(Spirv::from_file(KERNEL))?;
     let f = module.load_function("computeMain")?;

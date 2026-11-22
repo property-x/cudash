@@ -39,7 +39,7 @@ fn sizes() -> Vec<(String, usize)> {
 }
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     let device = ctx.name()?;
     common::print_header(

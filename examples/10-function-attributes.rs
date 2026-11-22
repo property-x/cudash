@@ -2,10 +2,10 @@
 //! PTX versions and occupancy are CUDA's, so this prints the limits that bound a launch,
 //! which belong to the device rather than the kernel.
 
-use cudash::driver::{CudaContext, DriverError, LaunchConfig, Spirv};
+use cudash::driver::{DriverError, GpuContext, LaunchConfig, Spirv};
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
 
     println!("Device: {}", ctx.name()?);
     println!();

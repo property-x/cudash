@@ -33,7 +33,7 @@ const ASYNC_LAUNCHES: usize = 2_000;
 const ROUND_TRIPS: usize = 500;
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     let module = ctx.load_module(Spirv::from_file(KERNEL))?;
     let f = module.load_function("double_all")?;

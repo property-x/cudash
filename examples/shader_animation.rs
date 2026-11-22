@@ -14,7 +14,7 @@ const HEIGHT: usize = 540;
 const FRAMES: usize = 60;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
 
     // attach RenderDoc before any Vulkan objects are created, so it can hook them all
     let mut renderdoc = RenderDoc::<V110>::new().ok();

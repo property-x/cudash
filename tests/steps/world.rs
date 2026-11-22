@@ -110,7 +110,7 @@ pub trait Element:
     const TY: Ty;
     fn from_scalar(value: Scalar) -> Self;
     fn to_scalar(self) -> Scalar;
-    fn wrap_driver(slice: driver::CudaSlice<Self>) -> DBuf;
+    fn wrap_driver(slice: driver::GpuSlice<Self>) -> DBuf;
 }
 
 macro_rules! int_element {
@@ -128,7 +128,7 @@ macro_rules! int_element {
             fn to_scalar(self) -> Scalar {
                 Scalar::Int(i128::from(self))
             }
-            fn wrap_driver(slice: driver::CudaSlice<Self>) -> DBuf {
+            fn wrap_driver(slice: driver::GpuSlice<Self>) -> DBuf {
                 DBuf::$dv(slice)
             }
         }
@@ -145,7 +145,7 @@ macro_rules! float_element {
             fn to_scalar(self) -> Scalar {
                 Scalar::Float(f64::from(self))
             }
-            fn wrap_driver(slice: driver::CudaSlice<Self>) -> DBuf {
+            fn wrap_driver(slice: driver::GpuSlice<Self>) -> DBuf {
                 DBuf::$dv(slice)
             }
         }
@@ -204,14 +204,14 @@ pub(crate) use with_ty;
 
 /// A buffer allocated by `cudash::driver`, of any element type.
 pub enum DBuf {
-    U8(driver::CudaSlice<u8>),
-    U16(driver::CudaSlice<u16>),
-    U32(driver::CudaSlice<u32>),
-    U64(driver::CudaSlice<u64>),
-    I32(driver::CudaSlice<i32>),
-    I64(driver::CudaSlice<i64>),
-    F32(driver::CudaSlice<f32>),
-    F64(driver::CudaSlice<f64>),
+    U8(driver::GpuSlice<u8>),
+    U16(driver::GpuSlice<u16>),
+    U32(driver::GpuSlice<u32>),
+    U64(driver::GpuSlice<u64>),
+    I32(driver::GpuSlice<i32>),
+    I64(driver::GpuSlice<i64>),
+    F32(driver::GpuSlice<f32>),
+    F64(driver::GpuSlice<f64>),
 }
 
 /// Matches a [`DBuf`] and runs `$body` with the inner buffer bound to `$s`.
@@ -266,7 +266,7 @@ impl DBuf {
     }
 
     /// Reads every element back to the host, on `stream`.
-    pub fn read_on(&self, stream: &Arc<driver::CudaStream>) -> Result<Vec<Scalar>, String> {
+    pub fn read_on(&self, stream: &Arc<driver::GpuStream>) -> Result<Vec<Scalar>, String> {
         on_buf!(self, s => {
             let host = stream.clone_dtoh(s).map_err(|e| format!("{e:?}"))?;
             Ok(host.into_iter().map(Element::to_scalar).collect())
@@ -276,7 +276,7 @@ impl DBuf {
     /// Copies `values` into the start of the buffer, on `stream`.
     pub fn write_on(
         &mut self,
-        stream: &Arc<driver::CudaStream>,
+        stream: &Arc<driver::GpuStream>,
         values: &[Scalar],
     ) -> Result<(), String> {
         on_buf!(self, s => write_driver(stream, s, 0, values))
@@ -285,7 +285,7 @@ impl DBuf {
     /// Copies `values` starting at element `start`, on `stream`.
     pub fn write_at_on(
         &mut self,
-        stream: &Arc<driver::CudaStream>,
+        stream: &Arc<driver::GpuStream>,
         start: usize,
         values: &[Scalar],
     ) -> Result<(), String> {
@@ -294,14 +294,14 @@ impl DBuf {
 }
 
 /// Wraps a typed driver slice in the [`DBuf`] for its element type.
-pub fn wrap<T: Element>(slice: driver::CudaSlice<T>) -> DBuf {
+pub fn wrap<T: Element>(slice: driver::GpuSlice<T>) -> DBuf {
     T::wrap_driver(slice)
 }
 
 /// Copies host values into a driver buffer starting at `start`.
 fn write_driver<T: Element>(
-    stream: &Arc<driver::CudaStream>,
-    slice: &mut driver::CudaSlice<T>,
+    stream: &Arc<driver::GpuStream>,
+    slice: &mut driver::GpuSlice<T>,
     start: usize,
     values: &[Scalar],
 ) -> Result<(), String> {
@@ -320,17 +320,17 @@ fn write_driver<T: Element>(
 
 /// Allocates a driver buffer of `len` zeroed elements of type `T`.
 pub fn alloc_driver<T: Element>(
-    stream: &Arc<driver::CudaStream>,
+    stream: &Arc<driver::GpuStream>,
     len: usize,
-) -> Result<driver::CudaSlice<T>, String> {
+) -> Result<driver::GpuSlice<T>, String> {
     stream.alloc_zeros::<T>(len).map_err(|e| format!("{e:?}"))
 }
 
 /// Allocates a driver buffer holding `values`, uploaded on `stream`.
 pub fn upload_driver<T: Element>(
-    stream: &Arc<driver::CudaStream>,
+    stream: &Arc<driver::GpuStream>,
     values: &[Scalar],
-) -> Result<driver::CudaSlice<T>, String> {
+) -> Result<driver::GpuSlice<T>, String> {
     let host: Vec<T> = values.iter().map(|v| T::from_scalar(*v)).collect();
     stream.clone_htod(&host).map_err(|e| format!("{e:?}"))
 }
@@ -339,11 +339,11 @@ pub fn upload_driver<T: Element>(
 #[derive(Default, cucumber::World)]
 pub struct World {
     // cudash::driver, for the Vulkan-only driver features
-    pub drv: Option<Arc<driver::CudaContext>>,
-    pub streams: HashMap<String, Arc<driver::CudaStream>>,
+    pub drv: Option<Arc<driver::GpuContext>>,
+    pub streams: HashMap<String, Arc<driver::GpuStream>>,
     pub dbufs: HashMap<String, DBuf>,
-    pub kernels: HashMap<String, Arc<driver::CudaFunction>>,
-    pub graphs: HashMap<String, Arc<driver::CudaGraph>>,
+    pub kernels: HashMap<String, Arc<driver::GpuFunction>>,
+    pub graphs: HashMap<String, Arc<driver::GpuGraph>>,
     pub pinned: Option<driver::PinnedHostSlice<f32>>,
     pub spirv: HashMap<String, Vec<u8>>,
 
@@ -375,18 +375,18 @@ impl fmt::Debug for World {
 
 impl World {
     /// The driver stream named `name`.
-    pub fn stream(&self, name: &str) -> Arc<driver::CudaStream> {
+    pub fn stream(&self, name: &str) -> Arc<driver::GpuStream> {
         self.streams
             .get(name)
             .unwrap_or_else(|| panic!("no stream named {name:?}"))
             .clone()
     }
 
-    pub fn default_stream(&self) -> Arc<driver::CudaStream> {
+    pub fn default_stream(&self) -> Arc<driver::GpuStream> {
         self.stream("default")
     }
 
-    pub fn ctx(&self) -> &Arc<driver::CudaContext> {
+    pub fn ctx(&self) -> &Arc<driver::GpuContext> {
         self.drv.as_ref().expect("a context was created")
     }
 

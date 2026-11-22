@@ -1,10 +1,10 @@
 //! cudarc's `examples/04-streams.rs` (MIT OR Apache-2.0) on Vulkan. The kernel is
 //! `tests/kernels/sin_kernel.slang`, loaded as SPIR-V instead of PTX.
 
-use cudash::driver::{CudaContext, DriverError, LaunchConfig, PushKernelArg, Spirv};
+use cudash::driver::{DriverError, GpuContext, LaunchConfig, PushKernelArg, Spirv};
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_file(concat!(
@@ -18,7 +18,7 @@ fn main() -> Result<(), DriverError> {
     let a_dev = stream.clone_htod(&a_host)?;
     let mut b_dev = stream.alloc_zeros::<f32>(n as usize)?;
 
-    // we can safely create a second stream using [CudaStream::fork()].
+    // we can safely create a second stream using [GpuStream::fork()].
     // This synchronizes with the source stream, so
     // the `clone_htod` & `alloc_zeros` above will complete **before**
     // work on this stream can start.

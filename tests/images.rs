@@ -1,4 +1,4 @@
-//! `CudaImage` from outside the crate: every format, size limits, drops and cross-stream sources.
+//! `GpuImage` from outside the crate: every format, size limits, drops and cross-stream sources.
 //! Not a feature file, because reading an image back needs hand-written Vulkan (`read_back`).
 //!
 //! `read_back` submits to cudash's own queue (the first compute family, queue 0) without cudash's
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use cudash::{
     ash::vk,
     driver::{
-        CudaContext, CudaImage, CudaStream, DriverError, ImageFormat, LaunchConfig, PushKernelArg,
+        DriverError, GpuContext, GpuImage, GpuStream, ImageFormat, LaunchConfig, PushKernelArg,
         Spirv, ValidAsZeroBits,
     },
 };
@@ -18,9 +18,9 @@ const DOUBLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/double_all.spv")
 
 /// Copies the image into a slice with `vkCmdCopyImageToBuffer` and reads that.
 fn read_back<T: ImageFormat + ValidAsZeroBits + Copy>(
-    ctx: &Arc<CudaContext>,
-    stream: &Arc<CudaStream>,
-    image: &CudaImage<T>,
+    ctx: &Arc<GpuContext>,
+    stream: &Arc<GpuStream>,
+    image: &GpuImage<T>,
 ) -> Vec<T> {
     ctx.synchronize().unwrap();
     let out = stream
@@ -88,8 +88,8 @@ fn read_back<T: ImageFormat + ValidAsZeroBits + Copy>(
     stream.clone_dtoh(&out).unwrap()
 }
 
-fn setup() -> (Arc<CudaContext>, Arc<CudaStream>) {
-    let ctx = CudaContext::new(0).unwrap();
+fn setup() -> (Arc<GpuContext>, Arc<GpuStream>) {
+    let ctx = GpuContext::new(0).unwrap();
     let stream = ctx.default_stream();
     (ctx, stream)
 }

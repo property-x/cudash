@@ -39,14 +39,14 @@ pub fn skip(reason: impl Display) {
 /// A cudash context and its default stream, and the CUDA context on the same GPU. cudash
 /// slices come from `stream`, and `as_cuda` lends them to cudarc.
 pub struct Nvidia {
-    pub ctx: Arc<driver::CudaContext>,
-    pub stream: Arc<driver::CudaStream>,
+    pub ctx: Arc<driver::GpuContext>,
+    pub stream: Arc<driver::GpuStream>,
     pub cuda: Arc<CudaContext>,
 }
 
 /// The NVIDIA GPU's contexts, or `None` after [`skip`]. Doesn't touch CUDA on other GPUs.
 pub fn nvidia() -> Option<Nvidia> {
-    let ctx = driver::CudaContext::new(0).inspect_err(|e| skip(e)).ok()?;
+    let ctx = driver::GpuContext::new(0).inspect_err(|e| skip(e)).ok()?;
     let cuda = ctx.as_cuda().inspect_err(|e| skip(e)).ok()?;
     let stream = ctx.default_stream();
     Some(Nvidia { ctx, stream, cuda })

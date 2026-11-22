@@ -29,7 +29,7 @@ pub enum DriverError {
     /// A call that can't be captured, or a capture call out of turn. Like CUDA, a call that
     /// can't be captured also invalidates the capture.
     StreamCapture(String),
-    /// From the CUDA part of a graph, under the `cudarc` feature.
+    /// From the CUDA part of a graph, under the `cuda` feature.
     Cuda(String),
 }
 

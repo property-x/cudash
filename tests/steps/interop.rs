@@ -10,9 +10,9 @@ const NVIDIA: u32 = 0x10de;
 
 #[given(regex = r"^a cudash context on a GPU from a vendor other than NVIDIA$")]
 fn given_other_vendor(w: &mut World) {
-    let count = driver::CudaContext::device_count().expect("Vulkan can be queried");
+    let count = driver::GpuContext::device_count().expect("Vulkan can be queried");
     let ctx = (0..count as usize)
-        .filter_map(|ordinal| driver::CudaContext::new(ordinal).ok())
+        .filter_map(|ordinal| driver::GpuContext::new(ordinal).ok())
         .find(|ctx| {
             let props = unsafe {
                 ctx.vk_instance()

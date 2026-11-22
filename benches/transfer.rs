@@ -40,7 +40,7 @@ fn iters_for(bytes: usize) -> usize {
 }
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     common::print_header(
@@ -159,7 +159,7 @@ fn time_n(
 /// The five host-to-device paths into one existing buffer, idle and behind queued work.
 /// Per call it times the call itself and the call plus a synchronize, and reports the
 /// median of all calls. Then the one-off costs: register, alloc_pinned, and filling.
-fn host_paths(stream: &std::sync::Arc<CudaStream>) -> Result<(), DriverError> {
+fn host_paths(stream: &std::sync::Arc<GpuStream>) -> Result<(), DriverError> {
     use std::time::Instant;
     let ctx = stream.context().clone();
     let a = stream.alloc_zeros::<f32>(BUSY_ELEMS)?;
@@ -304,6 +304,6 @@ fn host_paths(stream: &std::sync::Arc<CudaStream>) -> Result<(), DriverError> {
     Ok(())
 }
 
-fn dev_for(stream: &std::sync::Arc<CudaStream>) -> Result<CudaSlice<f32>, DriverError> {
+fn dev_for(stream: &std::sync::Arc<GpuStream>) -> Result<GpuSlice<f32>, DriverError> {
     stream.alloc_zeros::<f32>(FRAME_ELEMS)
 }

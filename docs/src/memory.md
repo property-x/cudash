@@ -2,14 +2,14 @@
 
 ## Contexts and slices
 
-A `CudaContext` is one GPU: a Vulkan instance and device. `CudaSlice<T>` is device memory holding `len` elements of
+A `GpuContext` is one GPU: a Vulkan instance and device. `GpuSlice<T>` is device memory holding `len` elements of
 `T`, like cudarc's. Allocation, copies and frees all go through a stream.
 
 ```rust
 use cudash::driver::*;
 
 # fn main() -> Result<(), DriverError> {
-let ctx = CudaContext::new(0)?;
+let ctx = GpuContext::new(0)?;
 let (free, total) = ctx.mem_get_info()?;
 println!("{}: {free} of {total} bytes free", ctx.name()?);
 let stream = ctx.default_stream();
@@ -46,13 +46,13 @@ queued after a kernel sees the kernel's results.
 
 ## Views
 
-Views are ranges of a slice, as in cudarc. Read-only views are `CudaView`, writable ones `CudaViewMut`, and every
+Views are ranges of a slice, as in cudarc. Read-only views are `GpuView`, writable ones `GpuViewMut`, and every
 copy and launch accepts both.
 
 ```rust
 # use cudash::driver::*;
 # fn main() -> Result<(), DriverError> {
-# let stream = CudaContext::new(0)?.default_stream();
+# let stream = GpuContext::new(0)?.default_stream();
 let mut buf = stream.clone_htod(&[0u32; 8])?;
 {
     let (mut left, mut right) = buf.split_at_mut(4);
@@ -88,7 +88,7 @@ memory skip it:
 ```rust
 # use cudash::driver::*;
 # fn main() -> Result<(), DriverError> {
-# let ctx = CudaContext::new(0)?;
+# let ctx = GpuContext::new(0)?;
 # let stream = ctx.default_stream();
 let mut pinned = unsafe { ctx.alloc_pinned::<f32>(256) }?;
 pinned.as_mut_slice()?.fill(3.0);

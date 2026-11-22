@@ -106,7 +106,7 @@ fn cached<T>(
     Ok(value)
 }
 
-impl crate::driver::CudaContext {
+impl crate::driver::GpuContext {
     /// The CUDA context on the same GPU. It's created on the first call and then shared by
     /// everything in this module.
     ///
@@ -117,7 +117,7 @@ impl crate::driver::CudaContext {
     }
 }
 
-impl crate::driver::CudaStream {
+impl crate::driver::GpuStream {
     /// The CUDA stream paired with this one: a fresh one, never the legacy null stream, which
     /// would serialize unrelated CUDA work. It's created on the first call.
     ///
@@ -159,7 +159,7 @@ fn uuid_bytes(uuid: sys::CUuuid) -> [u8; 16] {
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use cudash::interop::AsCuda;
 ///
-/// let ctx = cudash::driver::CudaContext::new(0)?;
+/// let ctx = cudash::driver::GpuContext::new(0)?;
 /// let stream = ctx.default_stream();
 /// let mut buf = stream.alloc_zeros::<f32>(4)?;
 /// {

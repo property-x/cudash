@@ -5,7 +5,7 @@ without CUDA via [ash](https://github.com/ash-project/ash), hence the name cudas
 
 ```rust
 // switch over to cudash
-use cudash::driver::*; // use cudarc::driver::*;
+use cudash::cudarc_compat::*; // use cudarc::driver::*;
 
 // do it like they do on the cudarc channel
 fn main() -> Result<(), DriverError> {
@@ -18,6 +18,9 @@ fn main() -> Result<(), DriverError> {
     Ok(())
 }
 ```
+
+`cudarc_compat` keeps cudarc's `Cuda*` names. cudash's own names are `Gpu*` (`CudaSlice` is `GpuSlice`), in
+`cudash::driver` and `cudash::prelude`. With the `cuda` feature, the prelude has both.
 
 Hint: This is a prototype to help me learn and understand Vulkan compute from a Cuda developers perspective.
 
@@ -35,7 +38,7 @@ The guide in `docs/` covers every feature in detail. Build it with `just docs`.
 - **Streams:** `default_stream`, `new_stream`, `fork` and `synchronize`. Work runs in call order, and
   buffers used from several streams are ordered automatically.
 - **Kernels:** `load_module`, `load_function`, `launch_builder`, `arg`, `launch` and `LaunchConfig`.
-- **Graphs:** `begin_capture`, `end_capture`, `capture_status`, and `CudaGraph::launch` and `upload`.
+- **Graphs:** `begin_capture`, `end_capture`, `capture_status`, and `GpuGraph::launch` and `upload`.
   Kernels, device copies, fills and pinned host copies are recorded into reusable command buffers.
   Other host copies and `synchronize` invalidate the capture, as in CUDA.
 
@@ -115,7 +118,7 @@ The goal is to have parity wherever it makes sense.
 Vulkan objects, for example to render results. Ordering that work against streams is up to you.
 
 To use a result in your own shaders as an image, `slice.to_image(width, height)` copies it into a
-`CudaImage<T>`, with the format taken from `T` (`f32` is `R32_SFLOAT`, `[u8; 4]` is `R8G8B8A8_UNORM`).
+`GpuImage<T>`, with the format taken from `T` (`f32` is `R32_SFLOAT`, `[u8; 4]` is `R8G8B8A8_UNORM`).
 `stream.clone_to_image` does the same on a stream of your choice, and `stream.imgcpy_dtod` refreshes an image.
 `slice.as_image(width, height)` copies nothing: the image is a linear view of the slice's memory, so later writes
 to the slice show in it. It fails with `InvalidImage` where the GPU can't do that, such as for tiny slices or
@@ -131,7 +134,7 @@ kernel source in the SPIR-V, so anyone with your binary can read it. Turn it off
 
 ## Using it with cudarc
 
-The `cudarc` feature adds `cudash::interop`, for sharing memory with real CUDA on NVIDIA hardware.
+The `cuda` feature adds `cudash::interop`, for sharing memory with real CUDA on NVIDIA hardware.
 With `use cudash::interop::AsCuda`, `slice.as_cuda()` and `slice.as_cuda_mut()` lend a cudash slice or
 view to cudarc calls without copying. Each cudash stream gets its own CUDA stream on first use, and
 `as_cuda_with(&cuda_stream)` picks another one. `SharedSemaphore::new(&ctx)` creates a semaphore both

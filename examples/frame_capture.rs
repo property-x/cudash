@@ -16,7 +16,7 @@ const WIDTH: usize = 2560;
 const HEIGHT: usize = 2160;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     let module = ctx.load_module(Spirv::from_file(KERNEL))?;
     let f = module.load_function("computeMain")?;

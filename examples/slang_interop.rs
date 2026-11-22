@@ -14,7 +14,7 @@ const KERNEL: &str = concat!(env!("OUT_DIR"), "/kernel.ptx");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Data Allocation: Vulkan
-    let cudash_ctx = cudash::driver::CudaContext::new(0)?;
+    let cudash_ctx = cudash::driver::GpuContext::new(0)?;
     let cudash_stream = cudash_ctx.default_stream();
     let len = 512;
     let mut data = cudash_stream.clone_htod(&vec![-1.0f32; len])?;

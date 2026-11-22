@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use cudash::driver::CudaContext;
+use cudash::driver::GpuContext;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     const N: usize = 100000;
@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let src_file = std::env::temp_dir().join("cudash_file_test.bin");
     fs::write(&src_file, &data)?;
 
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     let mut buf = stream.alloc_zeros::<u8>(data_sz)?;
 

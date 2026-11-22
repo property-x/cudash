@@ -3,7 +3,7 @@
 ## Requirements
 
 - **A Vulkan 1.3 GPU and driver.** Discrete GPUs are picked first, then integrated, virtual, other and CPU devices,
-  so `CudaContext::new(0)` is the fastest GPU. Software drivers such as llvmpipe work, but slowly.
+  so `GpuContext::new(0)` is the fastest GPU. Software drivers such as llvmpipe work, but slowly.
 - **Linux.** Interop shares memory through Unix file descriptors. The `driver` module itself has no Unix-only code,
   but has only run on Linux.
 - **For interop, an NVIDIA GPU with CUDA.** cudash finds the CUDA device with the same UUID as the Vulkan one.

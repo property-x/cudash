@@ -10,12 +10,12 @@ const SIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sin_kernel.spv"));
 const DOUBLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/double_all.spv"));
 const WRITE_STRUCT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/write_struct.spv"));
 
-fn load(ctx: &Arc<CudaContext>, spirv: &[u8], name: &str) -> CudaFunction {
+fn load(ctx: &Arc<GpuContext>, spirv: &[u8], name: &str) -> GpuFunction {
     let module = ctx.load_module(Spirv::from_binary(spirv.to_vec())).unwrap();
     module.load_function(name).unwrap()
 }
 
-fn double(stream: &CudaStream, f: &CudaFunction, x: &mut CudaSlice<f32>) {
+fn double(stream: &GpuStream, f: &GpuFunction, x: &mut GpuSlice<f32>) {
     let n = x.len() as i32;
     let mut builder = stream.launch_builder(f);
     builder.arg(x).arg(&n);
@@ -25,18 +25,18 @@ fn double(stream: &CudaStream, f: &CudaFunction, x: &mut CudaSlice<f32>) {
 /// cudarc's examples/01-allocate.rs
 #[test]
 fn example_allocate() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     // unsafe initialization of unset memory
-    let _: CudaSlice<f32> = unsafe { stream.alloc::<f32>(10) }?;
+    let _: GpuSlice<f32> = unsafe { stream.alloc::<f32>(10) }?;
 
     // this will have memory initialized as 0
-    let _: CudaSlice<f64> = stream.alloc_zeros::<f64>(10)?;
+    let _: GpuSlice<f64> = stream.alloc_zeros::<f64>(10)?;
 
     // initialize with slices!
-    let _: CudaSlice<usize> = stream.clone_htod(&[0; 10])?;
-    let _: CudaSlice<u32> = stream.clone_htod(&[1, 2, 3])?;
+    let _: GpuSlice<usize> = stream.clone_htod(&[0; 10])?;
+    let _: GpuSlice<u32> = stream.clone_htod(&[1, 2, 3])?;
 
     Ok(())
 }
@@ -44,10 +44,10 @@ fn example_allocate() -> Result<(), DriverError> {
 /// cudarc's examples/02-copy.rs
 #[test]
 fn example_copy() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
-    let a: CudaSlice<f64> = stream.alloc_zeros::<f64>(10)?;
+    let a: GpuSlice<f64> = stream.alloc_zeros::<f64>(10)?;
     let mut b = stream.alloc_zeros::<f64>(10)?;
 
     // you can do device to device copies of course
@@ -75,7 +75,7 @@ fn example_copy() -> Result<(), DriverError> {
 /// cudarc's examples/03-launch-kernel.rs
 #[test]
 fn example_launch_kernel() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_binary(SIN.to_vec()))?;
@@ -107,7 +107,7 @@ fn example_launch_kernel() -> Result<(), DriverError> {
 /// cudarc's examples/04-streams.rs
 #[test]
 fn example_streams() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_binary(SIN.to_vec()))?;
@@ -154,7 +154,7 @@ unsafe impl DeviceRepr for MyCoolRustStruct {}
 /// cudarc's examples/05-device-repr.rs
 #[test]
 fn example_device_repr() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     let f = load(&ctx, WRITE_STRUCT, "write_struct");
 
@@ -175,7 +175,7 @@ fn example_device_repr() -> Result<(), DriverError> {
 
 #[test]
 fn kernels_cover_every_element_across_many_blocks() {
-    let ctx = CudaContext::new(0).unwrap();
+    let ctx = GpuContext::new(0).unwrap();
     let stream = ctx.default_stream();
     let f = load(&ctx, DOUBLE, "double_all");
     // More than one block of 1024, in a shader that declares a block of 1.
@@ -186,7 +186,7 @@ fn kernels_cover_every_element_across_many_blocks() {
 
 #[test]
 fn views_work_like_slices() {
-    let ctx = CudaContext::new(0).unwrap();
+    let ctx = GpuContext::new(0).unwrap();
     let stream = ctx.default_stream();
     let mut a = stream.clone_htod(&[1u32, 2, 3, 4]).unwrap();
 
@@ -207,7 +207,7 @@ fn views_work_like_slices() {
 
 #[test]
 fn clones_are_independent() {
-    let ctx = CudaContext::new(0).unwrap();
+    let ctx = GpuContext::new(0).unwrap();
     let stream = ctx.default_stream();
     let a = stream.clone_htod(&[1u32, 2]).unwrap();
     let mut b = a.clone();
@@ -241,8 +241,8 @@ fn ptx_matches_the_spirv_kernels() {
 #[test]
 fn many_contexts_in_turn() -> Result<(), DriverError> {
     for i in 0..100 {
-        assert!(CudaContext::device_count()? >= 1, "context {i}");
-        let ctx = CudaContext::new(0)?;
+        assert!(GpuContext::device_count()? >= 1, "context {i}");
+        let ctx = GpuContext::new(0)?;
         let stream = ctx.default_stream();
         let x = stream.clone_htod(&[i as u32; 4])?;
         assert_eq!(stream.clone_dtoh(&x)?, [i as u32; 4]);

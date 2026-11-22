@@ -5,7 +5,7 @@ cudash is [cudarc](https://github.com/chelsea0x3b/cudarc)'s basic driver API, im
 driver, with no CUDA installed. For code that only uses memory and copies, changing the import is enough:
 
 ```rust
-use cudash::driver::*; // was: use cudarc::driver::*;
+use cudash::cudarc_compat::*; // was: use cudarc::driver::*;
 
 fn main() -> Result<(), DriverError> {
     let ctx = CudaContext::new(0)?;
@@ -21,12 +21,14 @@ fn main() -> Result<(), DriverError> {
 Kernels are the one real difference: Vulkan runs SPIR-V, not PTX. Writing kernels in
 [Slang](https://shader-slang.org) gives one source that compiles to both, with the same launch arguments.
 
-The crate has two modules:
+The crate's modules:
 
 | Module | What it is | Needs |
 |---|---|---|
-| `cudash::driver` | cudarc's driver API on Vulkan | Any Vulkan 1.3 GPU |
-| `cudash::interop` | Lends cudash memory to real cudarc calls, without copying | The `cudarc` feature (on by default), and an NVIDIA GPU at run time |
+| `cudash::driver` | cudarc's driver API on Vulkan, with `Gpu*` type names (`GpuSlice` for `CudaSlice`) | Any Vulkan 1.3 GPU |
+| `cudash::cudarc_compat` | The driver API under cudarc's `Cuda*` names, for porting | Any Vulkan 1.3 GPU |
+| `cudash::prelude` | The driver API, plus the `Cuda*` names with the `cuda` feature | Any Vulkan 1.3 GPU |
+| `cudash::interop` | Lends cudash memory to real cudarc calls, without copying | The `cuda` feature (on by default), and an NVIDIA GPU at run time |
 
 cudash is a prototype. Its tests pass on an AMD GPU with RADV and on an NVIDIA GTX 1650 Ti, and haven't run on other
 drivers.

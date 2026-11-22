@@ -17,10 +17,10 @@ use crate::compat::PushNext as _;
 
 use super::{
     DriverError,
-    context::CudaContext,
+    context::GpuContext,
     device::{Buffer, Device},
     graph::Capture,
-    slice::{CudaSlice, DevicePtr, DevicePtrMut, DeviceRepr, HostSlice, RawRange, ValidAsZeroBits},
+    slice::{DevicePtr, DevicePtrMut, DeviceRepr, GpuSlice, HostSlice, RawRange, ValidAsZeroBits},
 };
 
 struct Timeline {
@@ -111,7 +111,7 @@ pub(crate) struct StreamCore {
     /// What tools such as RenderDoc call this stream, such as `new_stream 3`.
     pub(crate) name: String,
     /// The CUDA stream paired with this one, created by `interop` on first use.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub(crate) cuda: crate::interop::StreamSlot,
 }
 
@@ -162,7 +162,7 @@ impl StreamCore {
                 }),
                 reusable: Mutex::new(None),
                 staging: Mutex::new(Vec::new()),
-                #[cfg(feature = "cudarc")]
+                #[cfg(feature = "cuda")]
                 cuda: Default::default(),
             }))
         }
@@ -476,13 +476,13 @@ impl StreamCore {
 /// has finished.
 #[must_use]
 pub struct SyncOnDrop<'a> {
-    stream: &'a CudaStream,
+    stream: &'a GpuStream,
     buffer: &'a Arc<Buffer>,
     write: bool,
 }
 
 impl<'a> SyncOnDrop<'a> {
-    pub(crate) fn new(stream: &'a CudaStream, buffer: &'a Arc<Buffer>, write: bool) -> Self {
+    pub(crate) fn new(stream: &'a GpuStream, buffer: &'a Arc<Buffer>, write: bool) -> Self {
         stream.core.mark_use(buffer, write);
         Self {
             stream,
@@ -569,34 +569,34 @@ impl Drop for StreamCore {
     }
 }
 
-/// Ordered GPU work, like cudarc's `CudaStream`: everything runs in the order it was
+/// Ordered GPU work, like cudarc's `GpuStream`: everything runs in the order it was
 /// called, and most calls return before the GPU has finished.
 ///
-/// Create with [`CudaContext::default_stream`], [`CudaContext::new_stream`] or
+/// Create with [`GpuContext::default_stream`], [`GpuContext::new_stream`] or
 /// [`Self::fork`].
-pub struct CudaStream {
+pub struct GpuStream {
     pub(crate) core: Arc<StreamCore>,
-    ctx: Arc<CudaContext>,
+    ctx: Arc<GpuContext>,
 }
 
-impl std::fmt::Debug for CudaStream {
+impl std::fmt::Debug for GpuStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaStream")
+        f.debug_struct("GpuStream")
             .field("ctx", &self.ctx)
             .finish_non_exhaustive()
     }
 }
 
 /// Streams are equal when they are the same queue of work, as in cudarc.
-impl PartialEq for CudaStream {
+impl PartialEq for GpuStream {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.core, &other.core)
     }
 }
-impl Eq for CudaStream {}
+impl Eq for GpuStream {}
 
-impl CudaStream {
-    pub(crate) fn new(ctx: &Arc<CudaContext>, core: Arc<StreamCore>) -> Arc<Self> {
+impl GpuStream {
+    pub(crate) fn new(ctx: &Arc<GpuContext>, core: Arc<StreamCore>) -> Arc<Self> {
         Arc::new(Self {
             core,
             ctx: ctx.clone(),
@@ -608,7 +608,7 @@ impl CudaStream {
     }
 
     /// The context this stream belongs to.
-    pub fn context(&self) -> &Arc<CudaContext> {
+    pub fn context(&self) -> &Arc<GpuContext> {
         &self.ctx
     }
 
@@ -647,19 +647,19 @@ impl CudaStream {
     pub unsafe fn alloc<T: DeviceRepr>(
         self: &Arc<Self>,
         len: usize,
-    ) -> Result<CudaSlice<T>, DriverError> {
+    ) -> Result<GpuSlice<T>, DriverError> {
         let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
         // SAFETY: the caller's contract.
         unsafe { self.alloc_exporting(len, opaque) }
     }
 
-    /// Allocates `len` zeroed elements that [`CudaSlice::export_dma_buf`] can export, where the
+    /// Allocates `len` zeroed elements that [`GpuSlice::export_dma_buf`] can export, where the
     /// driver allows it.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub fn alloc_zeros_dma_buf<T: DeviceRepr + ValidAsZeroBits>(
         self: &Arc<Self>,
         len: usize,
-    ) -> Result<CudaSlice<T>, DriverError> {
+    ) -> Result<GpuSlice<T>, DriverError> {
         let handles = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD
             | vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
         // SAFETY: zeroed right below, and the stream keeps later reads in order.
@@ -673,7 +673,7 @@ impl CudaStream {
         self: &Arc<Self>,
         len: usize,
         handles: vk::ExternalMemoryHandleTypeFlags,
-    ) -> Result<CudaSlice<T>, DriverError> {
+    ) -> Result<GpuSlice<T>, DriverError> {
         let bytes = len
             .checked_mul(size_of::<T>())
             .ok_or(DriverError::Vulkan(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY))?;
@@ -681,15 +681,15 @@ impl CudaStream {
         static COUNT: AtomicUsize = AtomicUsize::new(0);
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let ty = std::any::type_name::<T>();
-        buffer.set_name(format_args!("CudaSlice<{ty}> {id} len {len}"));
-        Ok(CudaSlice::from_buffer(buffer, len, self.clone()))
+        buffer.set_name(format_args!("GpuSlice<{ty}> {id} len {len}"));
+        Ok(GpuSlice::from_buffer(buffer, len, self.clone()))
     }
 
     /// Allocates `len` zeroed elements.
     pub fn alloc_zeros<T: DeviceRepr + ValidAsZeroBits>(
         self: &Arc<Self>,
         len: usize,
-    ) -> Result<CudaSlice<T>, DriverError> {
+    ) -> Result<GpuSlice<T>, DriverError> {
         // SAFETY: zeroed right below, and the stream keeps later reads in order.
         let mut slice = unsafe { self.alloc(len) }?;
         self.memset_zeros(&mut slice)?;
@@ -697,9 +697,9 @@ impl CudaStream {
     }
 
     /// An empty slice.
-    pub fn null<T>(self: &Arc<Self>) -> Result<CudaSlice<T>, DriverError> {
+    pub fn null<T>(self: &Arc<Self>) -> Result<GpuSlice<T>, DriverError> {
         let buffer = Buffer::device_local(self.device(), 0)?;
-        Ok(CudaSlice::from_buffer(buffer, 0, self.clone()))
+        Ok(GpuSlice::from_buffer(buffer, 0, self.clone()))
     }
 
     /// Zeroes a slice or view, in stream order.
@@ -791,7 +791,7 @@ impl CudaStream {
     /// Copies host data into a slice or view, in stream order, without waiting for the GPU.
     ///
     /// A [`PinnedHostSlice`](super::PinnedHostSlice), or memory inside a
-    /// [`host_register`](CudaContext::host_register)ed range, is read by the GPU directly.
+    /// [`host_register`](GpuContext::host_register)ed range, is read by the GPU directly.
     /// Anything else is copied into a reused staging buffer first, so it's free to change
     /// as soon as this returns.
     ///
@@ -952,7 +952,7 @@ impl CudaStream {
     pub fn clone_htod<T: DeviceRepr, Src: HostSlice<T> + ?Sized>(
         self: &Arc<Self>,
         src: &Src,
-    ) -> Result<CudaSlice<T>, DriverError> {
+    ) -> Result<GpuSlice<T>, DriverError> {
         // SAFETY: the copy below initializes every element, in stream order.
         let mut dst = unsafe { self.alloc(src.len()) }?;
         self.memcpy_htod(src, &mut dst)?;
@@ -1066,7 +1066,7 @@ impl CudaStream {
     pub fn clone_dtod<T: DeviceRepr, Src: DevicePtr<T>>(
         self: &Arc<Self>,
         src: &Src,
-    ) -> Result<CudaSlice<T>, DriverError> {
+    ) -> Result<GpuSlice<T>, DriverError> {
         // SAFETY: the copy below initializes every element, in stream order.
         let mut dst = unsafe { self.alloc(src.len()) }?;
         self.memcpy_dtod(src, &mut dst)?;
@@ -1094,7 +1094,7 @@ mod tests {
     }
 
     impl Gate {
-        fn new(ctx: &Arc<CudaContext>) -> Self {
+        fn new(ctx: &Arc<GpuContext>) -> Self {
             *GATES.lock().unwrap_or_else(|e| e.into_inner()) += 1;
             Self {
                 core: StreamCore::new(&ctx.device, None, "test").unwrap(),
@@ -1102,12 +1102,12 @@ mod tests {
         }
 
         /// A stream whose work can't start until [`Self::open`].
-        fn stream(&self, ctx: &Arc<CudaContext>) -> Arc<CudaStream> {
+        fn stream(&self, ctx: &Arc<GpuContext>) -> Arc<GpuStream> {
             let after = Point {
                 timeline: self.core.timeline.clone(),
                 value: 1,
             };
-            CudaStream::new(
+            GpuStream::new(
                 ctx,
                 StreamCore::new(&ctx.device, Some(after), "test").unwrap(),
             )
@@ -1130,7 +1130,7 @@ mod tests {
 
     /// Copies `src` to the GPU without staging, and checks what arrived.
     /// Returns false if this driver has no host import.
-    fn imports(stream: &Arc<CudaStream>, src: &[u8]) -> bool {
+    fn imports(stream: &Arc<GpuStream>, src: &[u8]) -> bool {
         let mut dst = stream.alloc_zeros::<u8>(src.len()).unwrap();
         match stream.memcpy_htod_unstaged(src, &mut dst) {
             Err(DriverError::MissingFeature(name)) => {
@@ -1147,7 +1147,7 @@ mod tests {
 
     #[test]
     fn device_ptr_keeps_the_buffer_until_the_stream_is_done() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let (stream, other) = (ctx.default_stream(), ctx.new_stream().unwrap());
         let slice = stream.clone_htod(&[1u32, 2, 3]).unwrap();
         stream.synchronize().unwrap();
@@ -1167,7 +1167,7 @@ mod tests {
 
     #[test]
     fn frame_returns_the_active_id_until_stopped() {
-        let stream = CudaContext::new(0).unwrap().default_stream();
+        let stream = GpuContext::new(0).unwrap().default_stream();
         if !stream.supports_frame_boundaries() {
             assert!(matches!(
                 stream.frame(),
@@ -1186,7 +1186,7 @@ mod tests {
 
     #[test]
     fn transmute_reinterprets_the_same_bytes() {
-        let stream = CudaContext::new(0).unwrap().default_stream();
+        let stream = GpuContext::new(0).unwrap().default_stream();
         let mut slice = stream.clone_htod(&[1u32, 0, 2, 0, 3]).unwrap();
         unsafe {
             assert!(slice.transmute::<u64>(3).is_none(), "needs 24 of 20 bytes");
@@ -1201,16 +1201,16 @@ mod tests {
 
     #[test]
     fn equality_is_identity() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         assert_eq!(ctx.default_stream(), ctx.default_stream());
         assert_ne!(ctx.default_stream(), ctx.new_stream().unwrap());
-        assert_ne!(ctx, CudaContext::new(0).unwrap());
+        assert_ne!(ctx, GpuContext::new(0).unwrap());
         assert!(format!("{:?}", ctx.default_stream()).contains("ordinal: 0"));
     }
 
     #[test]
     fn unstaged_copies_any_ordinary_host_memory() {
-        let stream = CudaContext::new(0).unwrap().default_stream();
+        let stream = GpuContext::new(0).unwrap().default_stream();
         let page = 4096;
         let data: Vec<u8> = (0..3 * page).map(|i| (i % 251) as u8).collect();
         for src in [
@@ -1232,7 +1232,7 @@ mod tests {
 
     #[test]
     fn unstaged_writes_only_the_part_of_dst_it_should() {
-        let stream = CudaContext::new(0).unwrap().default_stream();
+        let stream = GpuContext::new(0).unwrap().default_stream();
         let mut dst = stream.clone_htod(&[9u8; 16]).unwrap();
         let src = vec![1u8; 4];
         let mut view = dst.slice_mut(4..8);
@@ -1247,7 +1247,7 @@ mod tests {
 
     #[test]
     fn unstaged_neighbours_in_one_page_can_copy_at_once() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let data: Vec<u8> = (0..1000).map(|i| (i % 251) as u8).collect();
         std::thread::scope(|scope| {
             for chunk in data.chunks(100) {
@@ -1269,7 +1269,7 @@ mod tests {
         let _no_gates = NO_GATES
             .wait_while(GATES.lock().unwrap_or_else(|e| e.into_inner()), |n| *n > 0)
             .unwrap_or_else(|e| e.into_inner());
-        let stream = CudaContext::new(0).unwrap().default_stream();
+        let stream = GpuContext::new(0).unwrap().default_stream();
         let mut dst = stream.alloc_zeros::<u8>(DATA.len()).unwrap();
         if stream.memcpy_htod_unstaged(&DATA, &mut dst).is_ok() {
             assert_eq!(stream.clone_dtoh(&dst).unwrap(), DATA);
@@ -1278,7 +1278,7 @@ mod tests {
 
     #[test]
     fn unstaged_waits_for_earlier_work_and_its_copy() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let mut dst = stream.clone_htod(&[1u8; 64]).unwrap();
@@ -1299,7 +1299,7 @@ mod tests {
 
     #[test]
     fn reused_staging_never_overwrites_a_copy_in_flight() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let mut one = stream.alloc_zeros::<u32>(64).unwrap();
@@ -1313,7 +1313,7 @@ mod tests {
 
     #[test]
     fn reused_staging_is_reused_when_finished_and_big_enough() {
-        let stream = CudaContext::new(0).unwrap().default_stream();
+        let stream = GpuContext::new(0).unwrap().default_stream();
         let cached = || stream.core.reusable.lock().unwrap().clone().unwrap();
         let mut dst = stream.alloc_zeros::<u32>(64).unwrap();
 
@@ -1338,14 +1338,14 @@ mod tests {
     }
 
     /// Pointers to the staging buffers a stream keeps, oldest first.
-    fn kept(stream: &CudaStream) -> Vec<*const Buffer> {
+    fn kept(stream: &GpuStream) -> Vec<*const Buffer> {
         let staging = stream.core.staging.lock().unwrap();
         staging.iter().map(|(b, _)| Arc::as_ptr(b)).collect()
     }
 
     #[test]
     fn staging_is_reused_once_the_gpu_is_done_and_never_before() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let mut one = stream.alloc_zeros::<u32>(64).unwrap();
@@ -1384,7 +1384,7 @@ mod tests {
 
     #[test]
     fn pinned_memory_is_copied_directly_and_waits_before_access() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let mut pinned = unsafe { ctx.alloc_pinned::<u32>(64) }.unwrap();
@@ -1418,7 +1418,7 @@ mod tests {
 
     #[test]
     fn dtoh_into_pinned_memory_returns_before_the_copy_and_pageable_reuses_staging() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let src = ctx.default_stream().clone_htod(&[7u32]).unwrap();
@@ -1445,7 +1445,7 @@ mod tests {
     }
 
     /// Registers `data`, or returns false if this driver can't.
-    fn register(ctx: &CudaContext, data: &[u8]) -> bool {
+    fn register(ctx: &GpuContext, data: &[u8]) -> bool {
         match unsafe { ctx.host_register(data) } {
             Err(DriverError::MissingFeature(_)) => false,
             result => {
@@ -1457,7 +1457,7 @@ mod tests {
 
     #[test]
     fn registered_memory_is_copied_directly() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.default_stream();
         let data: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
         if !register(&ctx, &data) {
@@ -1491,7 +1491,7 @@ mod tests {
 
     #[test]
     fn registering_follows_cudas_rules() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let data = vec![0u8; 8192];
         if !register(&ctx, &data[100..200]) {
             return;
@@ -1518,7 +1518,7 @@ mod tests {
 
     #[test]
     fn registered_copies_return_at_once_and_unregister_waits_for_them() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let data = vec![5u8; 4096 * 3];
@@ -1542,7 +1542,7 @@ mod tests {
     }
 
     /// How many operations have finished on a stream, after giving them time to run.
-    fn finished(stream: &CudaStream) -> u64 {
+    fn finished(stream: &GpuStream) -> u64 {
         sleep(Duration::from_millis(100));
         let (device, semaphore) = (&stream.core.device.device, stream.core.timeline.semaphore);
         unsafe { device.get_semaphore_counter_value(semaphore) }.unwrap()
@@ -1550,7 +1550,7 @@ mod tests {
 
     #[test]
     fn work_waits_for_earlier_work_on_its_stream() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let a = stream.clone_htod(&[7u32; 16]).unwrap();
@@ -1563,7 +1563,7 @@ mod tests {
 
     #[test]
     fn forks_wait_for_their_source() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let source = gate.stream(&ctx);
         let a = source.clone_htod(&[7u32; 16]).unwrap();
@@ -1587,13 +1587,13 @@ mod tests {
         waits
     }
 
-    fn at(stream: &CudaStream, value: u64) -> (*const Timeline, u64) {
+    fn at(stream: &GpuStream, value: u64) -> (*const Timeline, u64) {
         (Arc::as_ptr(&stream.core.timeline), value)
     }
 
     #[test]
     fn cross_stream_waits_follow_each_buffers_reads_and_writes() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let (one, two) = (ctx.new_stream().unwrap(), ctx.new_stream().unwrap());
         let mut a = one.clone_htod(&[1u32; 16]).unwrap(); // `one` value 1 writes it
         let buffer = a.raw().buffer.clone();
@@ -1635,7 +1635,7 @@ mod tests {
 
     #[test]
     fn repeated_reads_on_a_stream_keep_only_the_latest() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let (one, two) = (ctx.new_stream().unwrap(), ctx.new_stream().unwrap());
         let a = one.clone_htod(&[1u32; 16]).unwrap();
         let buffer = a.raw().buffer.clone();
@@ -1648,7 +1648,7 @@ mod tests {
 
     #[test]
     fn slices_can_drop_while_their_work_is_held_back() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let gate = Gate::new(&ctx);
         let stream = gate.stream(&ctx);
         let a = stream.clone_htod(&[7u32; 16]).unwrap();

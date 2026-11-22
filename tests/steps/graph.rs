@@ -1,4 +1,4 @@
-//! Steps for `features/driver_graphs.feature`: stream capture and `CudaGraph` replay.
+//! Steps for `features/driver_graphs.feature`: stream capture and `GpuGraph` replay.
 
 use std::sync::Arc;
 

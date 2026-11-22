@@ -1,12 +1,12 @@
 //! cudarc's `examples/matmul-kernel.rs` (MIT OR Apache-2.0) on Vulkan. The kernel is
 //! `examples/slang/matmul.slang`, compiled ahead of time by `build.rs` instead of NVRTC.
 
-use cudash::driver::{CudaContext, DriverError, LaunchConfig, PushKernelArg, Spirv};
+use cudash::driver::{DriverError, GpuContext, LaunchConfig, PushKernelArg, Spirv};
 
 fn main() -> Result<(), DriverError> {
     let start = std::time::Instant::now();
 
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
     println!("Built in {:?}", start.elapsed());
 

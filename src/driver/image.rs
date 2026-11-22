@@ -17,7 +17,7 @@ use super::{
     DriverError,
     device::{Buffer, Device},
     slice::{DevicePtr, DeviceRepr},
-    stream::CudaStream,
+    stream::GpuStream,
 };
 
 /// Element types that are one texel of a Vulkan format.
@@ -48,27 +48,27 @@ image_formats!(
 );
 
 /// A 2D Vulkan image holding `width * height` elements of `T`, made by
-/// [`CudaStream::clone_to_image`] or [`DevicePtr::to_image`] (copies) or [`DevicePtr::as_image`] (a view of the slice's
+/// [`GpuStream::clone_to_image`] or [`DevicePtr::to_image`] (copies) or [`DevicePtr::as_image`] (a view of the slice's
 /// memory, so later writes to the slice show in the image). Its layout is `GENERAL`, so your
 /// own pipelines can sample it or use it as a storage image. Order that work against the
-/// slice's stream yourself, as for [`CudaSlice::vk_buffer`](super::CudaSlice::vk_buffer).
-pub struct CudaImage<T> {
+/// slice's stream yourself, as for [`GpuSlice::vk_buffer`](super::GpuSlice::vk_buffer).
+pub struct GpuImage<T> {
     inner: Arc<ImageInner>,
     width: u32,
     height: u32,
     marker: PhantomData<T>,
 }
 
-impl<T> std::fmt::Debug for CudaImage<T> {
+impl<T> std::fmt::Debug for GpuImage<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaImage")
+        f.debug_struct("GpuImage")
             .field("width", &self.width)
             .field("height", &self.height)
             .finish_non_exhaustive()
     }
 }
 
-impl<T: ImageFormat> CudaImage<T> {
+impl<T: ImageFormat> GpuImage<T> {
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -347,7 +347,7 @@ pub(super) fn image_over<T: ImageFormat, Src: DevicePtr<T>>(
     src: &Src,
     width: u32,
     height: u32,
-) -> Result<CudaImage<T>, DriverError> {
+) -> Result<GpuImage<T>, DriverError> {
     assert_eq!(src.len(), width as usize * height as usize);
     let range = src.raw();
     let inner = Arc::new(ImageInner::over(
@@ -360,7 +360,7 @@ pub(super) fn image_over<T: ImageFormat, Src: DevicePtr<T>>(
     )?);
     let (device, image) = (&inner.device, inner.image);
     let name = format_args!(
-        "CudaImage<{}> view {width}x{height}",
+        "GpuImage<{}> view {width}x{height}",
         std::any::type_name::<T>()
     );
     device.set_name(inner.image, name);
@@ -386,7 +386,7 @@ pub(super) fn image_over<T: ImageFormat, Src: DevicePtr<T>>(
             device.cmd_pipeline_barrier2(commands, &dependency);
         },
     )?;
-    Ok(CudaImage {
+    Ok(GpuImage {
         inner,
         width,
         height,
@@ -402,7 +402,7 @@ const COLOR: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     layer_count: 1,
 };
 
-impl CudaStream {
+impl GpuStream {
     /// Copies `src`, `width * height` elements in rows, into a new image, in stream order.
     ///
     /// # Panics
@@ -412,16 +412,16 @@ impl CudaStream {
         src: &Src,
         width: u32,
         height: u32,
-    ) -> Result<CudaImage<T>, DriverError> {
+    ) -> Result<GpuImage<T>, DriverError> {
         let inner = ImageInner::new(self.device(), T::FORMAT, width, height)?;
         static COUNT: AtomicUsize = AtomicUsize::new(0);
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let ty = std::any::type_name::<T>();
-        let name = format_args!("CudaImage<{ty}> {id} {width}x{height}");
+        let name = format_args!("GpuImage<{ty}> {id} {width}x{height}");
         self.device().set_name(inner.image, name);
         self.device().set_name(inner.view, name);
         self.device().set_name(inner.memory, name);
-        let mut image = CudaImage {
+        let mut image = GpuImage {
             inner: Arc::new(inner),
             width,
             height,
@@ -442,7 +442,7 @@ impl CudaStream {
     pub fn imgcpy_dtod<T: ImageFormat, Src: DevicePtr<T>>(
         self: &Arc<Self>,
         src: &Src,
-        dst: &mut CudaImage<T>,
+        dst: &mut GpuImage<T>,
     ) -> Result<(), DriverError> {
         if dst.inner.source.is_some() {
             return Err(DriverError::InvalidImage(
@@ -512,12 +512,12 @@ impl CudaStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::{CudaContext, DevicePtrMut};
+    use crate::driver::{DevicePtrMut, GpuContext};
 
     /// Reads the image back through a buffer, which is how a user's shader would see it.
     fn read_back<T: ImageFormat + Default + Clone + crate::driver::ValidAsZeroBits>(
-        stream: &Arc<CudaStream>,
-        image: &CudaImage<T>,
+        stream: &Arc<GpuStream>,
+        image: &GpuImage<T>,
     ) -> Vec<T> {
         let len = (image.width * image.height) as usize;
         let mut out = stream.alloc_zeros::<T>(len).unwrap();
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn images_hold_the_slice_in_rows_and_can_be_overwritten() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.default_stream();
         let data: Vec<f32> = (0..15).map(|i| i as f32).collect();
         let slice = stream.clone_htod(&data).unwrap();
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn views_copy_from_their_offset() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.default_stream();
         let pixels: Vec<[u8; 4]> = (0..8u8).map(|i| [i, i + 1, i + 2, 255]).collect();
         let slice = stream.clone_htod(&pixels).unwrap();
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn as_image_sees_the_slice_without_copying() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.default_stream();
         let data: Vec<f32> = (0..64 * 64).map(|i| i as f32).collect();
         let mut slice = stream.clone_htod(&data).unwrap();
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn bad_sizes_are_errors_or_panics() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.default_stream();
         let slice = stream.alloc_zeros::<f32>(4).unwrap();
         assert!(matches!(

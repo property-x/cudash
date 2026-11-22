@@ -14,7 +14,7 @@ use cudash::{
 const TIMEOUT_NS: u64 = 5_000_000_000;
 
 /// The queue the test submits on: the compute queue family cudash picks (the first with
-/// COMPUTE), queue 0. Not exposed by `driver::CudaContext`.
+/// COMPUTE), queue 0. Not exposed by `driver::GpuContext`.
 struct Vk {
     gpu: Nvidia,
     queue: vk::Queue,

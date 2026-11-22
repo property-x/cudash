@@ -3,11 +3,11 @@
 
 use cudash::{
     ash::vk,
-    driver::{CudaContext, DriverError},
+    driver::{DriverError, GpuContext},
 };
 
 fn main() -> Result<(), DriverError> {
-    let dev = CudaContext::new(0)?;
+    let dev = GpuContext::new(0)?;
 
     let mut maintenance3 = vk::PhysicalDeviceMaintenance3Properties::default();
     #[cfg(not(feature = "ash_latest"))]

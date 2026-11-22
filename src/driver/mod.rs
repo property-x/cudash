@@ -1,13 +1,14 @@
-//! cudarc's basic driver API, on Vulkan. Changing `use cudarc::driver::*` to
-//! `use cudash::driver::*` is enough for code that only uses memory and copies.
+//! cudarc's basic driver API, on Vulkan, with `Gpu*` type names (`GpuSlice` for `CudaSlice`). Changing
+//! `use cudarc::driver::*` to `use cudash::cudarc_compat::*` is enough for code that only uses memory
+//! and copies.
 //!
 //! ```no_run
 //! use cudash::driver::*;
 //!
 //! # fn main() -> Result<(), DriverError> {
-//! let ctx = CudaContext::new(0)?;
+//! let ctx = GpuContext::new(0)?;
 //! let stream = ctx.default_stream();
-//! let a: CudaSlice<f32> = stream.clone_htod(&[1.0f32; 100])?;
+//! let a: GpuSlice<f32> = stream.clone_htod(&[1.0f32; 100])?;
 //! let mut b = stream.alloc_zeros::<f32>(100)?;
 //! stream.memcpy_dtod(&a, &mut b)?;
 //! assert_eq!(stream.clone_dtoh(&b)?, vec![1.0; 100]);
@@ -30,14 +31,14 @@ mod slice;
 pub(crate) mod stream;
 pub mod sys;
 
-pub use context::CudaContext;
+pub use context::GpuContext;
 pub use error::DriverError;
-pub use graph::CudaGraph;
+pub use graph::GpuGraph;
 pub use host::PinnedHostSlice;
-pub use image::{CudaImage, ImageFormat};
-pub use kernel::{CudaFunction, CudaModule, LaunchArgs, LaunchConfig, PushKernelArg, Spirv};
+pub use image::{GpuImage, ImageFormat};
+pub use kernel::{GpuFunction, GpuModule, LaunchArgs, LaunchConfig, PushKernelArg, Spirv};
 pub use slice::{
-    CudaSlice, CudaView, CudaViewMut, DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice, HostSlice,
+    DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice, GpuSlice, GpuView, GpuViewMut, HostSlice,
     RawRange, ValidAsZeroBits,
 };
-pub use stream::{CudaStream, SyncOnDrop};
+pub use stream::{GpuStream, SyncOnDrop};

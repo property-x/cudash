@@ -20,7 +20,7 @@ pub(crate) struct CudaPart {
 }
 
 // SAFETY: CUDA handles aren't tied to a thread, and every use binds the context. CUDA graphs
-// aren't internally synchronized, but a part is only used by `CudaGraph::launch` and `upload`
+// aren't internally synchronized, but a part is only used by `GpuGraph::launch` and `upload`
 // on its own cudash stream, and launch holds that stream's lock.
 unsafe impl Send for CudaPart {}
 unsafe impl Sync for CudaPart {}
@@ -189,7 +189,7 @@ mod tests {
 
     use crate::{
         driver::{
-            self, CudaContext, PushKernelArg as _, Spirv, sys::CUgraphInstantiate_flags as Flags,
+            self, GpuContext, PushKernelArg as _, Spirv, sys::CUgraphInstantiate_flags as Flags,
         },
         interop::{AsCuda, Error},
     };
@@ -211,8 +211,8 @@ mod tests {
     /// The CUDA and Vulkan kernels, or `None` without an NVIDIA GPU, unless
     /// `CUDASH_REQUIRE_NVIDIA` is set.
     fn kernels(
-        ctx: &Arc<CudaContext>,
-    ) -> Option<(driver::CudaFunction, cudarc::driver::CudaFunction)> {
+        ctx: &Arc<GpuContext>,
+    ) -> Option<(driver::GpuFunction, cudarc::driver::CudaFunction)> {
         let cuda = match ctx.as_cuda() {
             Err(Error::NoMatchingCudaDevice)
                 if std::env::var_os("CUDASH_REQUIRE_NVIDIA").is_none() =>
@@ -237,18 +237,14 @@ mod tests {
         Some((module.load_function("double_all").unwrap(), add_one))
     }
 
-    fn double(
-        stream: &driver::CudaStream,
-        f: &driver::CudaFunction,
-        x: &mut driver::CudaSlice<f32>,
-    ) {
+    fn double(stream: &driver::GpuStream, f: &driver::GpuFunction, x: &mut driver::GpuSlice<f32>) {
         let n = N as i32;
         let mut builder = stream.launch_builder(f);
         builder.arg(x).arg(&n);
         unsafe { builder.launch(driver::LaunchConfig::for_num_elems(N as u32)) }.unwrap();
     }
 
-    fn add_one(f: &cudarc::driver::CudaFunction, x: &mut driver::CudaSlice<f32>) -> Result<()> {
+    fn add_one(f: &cudarc::driver::CudaFunction, x: &mut driver::GpuSlice<f32>) -> Result<()> {
         let mut lent = x.as_cuda_mut()?;
         let cuda = lent.stream().clone();
         let n = N as i32;
@@ -263,7 +259,7 @@ mod tests {
     #[test]
     fn mixed_graphs_replay_in_order() {
         let _turn = CUDA_CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let Some((vk_double, cuda_add_one)) = kernels(&ctx) else {
             return;
         };
@@ -313,7 +309,7 @@ mod tests {
     #[test]
     fn cuda_invalidation_keeps_the_vulkan_prefix() {
         let _turn = CUDA_CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let Some((vk_double, cuda_add_one)) = kernels(&ctx) else {
             return;
         };
@@ -341,7 +337,7 @@ mod tests {
     #[test]
     fn partial_captures_drop_cuda_work_after_a_refused_call() {
         let _turn = CUDA_CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let Some((vk_double, cuda_add_one)) = kernels(&ctx) else {
             return;
         };
@@ -365,7 +361,7 @@ mod tests {
     #[test]
     fn lends_across_the_capture_boundary() {
         let _turn = CUDA_CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let Some((vk_double, cuda_add_one)) = kernels(&ctx) else {
             return;
         };

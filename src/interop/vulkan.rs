@@ -139,12 +139,12 @@ mod tests {
     use std::os::fd::IntoRawFd;
 
     use super::*;
-    use crate::driver::CudaContext;
+    use crate::driver::GpuContext;
 
     /// A context on the first GPU, if it can export timeline semaphores. Software drivers
     /// such as llvmpipe can't.
-    fn any_gpu() -> Option<(Arc<CudaContext>, VulkanExporter)> {
-        let ctx = CudaContext::new(0)
+    fn any_gpu() -> Option<(Arc<GpuContext>, VulkanExporter)> {
+        let ctx = GpuContext::new(0)
             .inspect_err(|e| eprintln!("SKIPPED: {e}"))
             .ok()?;
         let exporter = VulkanExporter::new(&ctx.device)

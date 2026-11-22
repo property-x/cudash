@@ -7,7 +7,7 @@ use cudash::driver::*;
 use cudash::driver::sys::{CUgraphInstantiate_flags, CUstreamCaptureMode};
 
 # fn main() -> Result<(), DriverError> {
-let ctx = CudaContext::new(0)?;
+let ctx = GpuContext::new(0)?;
 let stream = ctx.new_stream()?;
 let mut data = stream.clone_htod(&[1u32; 4])?;
 
@@ -59,7 +59,7 @@ Things that are fixed at capture time, as in CUDA:
 
 ## Keeping a partial capture
 
-`end_capture_partial` returns `(CudaGraph, Option<DriverError>)`. If the capture was invalidated, the graph holds
+`end_capture_partial` returns `(GpuGraph, Option<DriverError>)`. If the capture was invalidated, the graph holds
 what was recorded before that, and the error says what invalidated it. The call that failed and everything after it
 are missing, so check the error before replaying: kernels that were meant to follow a refused copy would run on
 stale input.
@@ -71,7 +71,7 @@ paired CUDA stream. CUDA then discards its work since the last cudash operation,
 # use cudash::driver::*;
 # use cudash::driver::sys::{CUgraphInstantiate_flags, CUstreamCaptureMode};
 # fn main() -> Result<(), DriverError> {
-# let stream = CudaContext::new(0)?.new_stream()?;
+# let stream = GpuContext::new(0)?.new_stream()?;
 # let mut data = stream.alloc_zeros::<u32>(4)?;
 stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
 stream.memset_zeros(&mut data)?;
@@ -95,7 +95,7 @@ between operations. A replay is one queue submission instead of one per operatio
 
 ## Mixed graphs
 
-With the `cudarc` feature, CUDA work can be part of a cudash graph. While a cudash stream captures, its paired CUDA
+With the `cuda` feature, CUDA work can be part of a cudash graph. While a cudash stream captures, its paired CUDA
 stream captures too, in the same mode. cudarc calls on a lent slice, inside the capture, are recorded by CUDA:
 
 ```rust,no_run
@@ -103,7 +103,7 @@ use cudash::driver::sys::{CUgraphInstantiate_flags, CUstreamCaptureMode};
 use cudash::interop::{AsCuda, cudarc};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let ctx = cudash::driver::CudaContext::new(0)?;
+# let ctx = cudash::driver::GpuContext::new(0)?;
 # let stream = ctx.new_stream()?;
 # let mut x = stream.alloc_zeros::<f32>(1024)?;
 # let cuda_kernel: cudarc::driver::CudaFunction = todo!();

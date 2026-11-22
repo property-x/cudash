@@ -1,4 +1,4 @@
-@cudarc @nvidia @untested
+@cuda @nvidia @untested
 Feature: Lending a cudash buffer to cudarc calls
   `AsCuda::as_cuda` and `as_cuda_mut` (plan/api.md, "Interop") give a cudarc call temporary
   access to a cudash slice, on the CUDA stream paired with the slice's cudash stream. Borrow

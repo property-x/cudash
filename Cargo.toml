@@ -17,10 +17,10 @@ ash_latest = { package = "ash", git = "https://github.com/ash-rs/ash", optional 
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
 
 [features]
-# On by default. Enables `cudash::interop` and the cudarc dependency.
+# On by default. Enables `cudash::interop` and the cudarc dependency, and adds `cudarc_compat` to the prelude.
 # Even with it should run on any GPU without the interop.
-default = ["cudarc", "kernel_debug"]
-cudarc = ["dep:cudarc"]
+default = ["cuda", "kernel_debug"]
+cuda = ["dep:cudarc"]
 # On by default. Compiles the Slang kernels with `-g`, so RenderDoc shows their source and can step
 # through a thread. This embeds the kernel source in the SPIR-V: turn it off for builds you ship.
 kernel_debug = []
@@ -37,7 +37,7 @@ cudarc = { version = "0.19", default-features = false, features = ["std", "drive
 renderdoc = "0.12.1"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
 
-# Driver-only benches. They run on any Vulkan 1.3 GPU, so they need no cudarc feature.
+# Driver-only benches. They run on any Vulkan 1.3 GPU, so they need no cuda feature.
 [[bench]]
 name = "launch"
 harness = false
@@ -48,34 +48,34 @@ harness = false
 
 [[test]]
 name = "interop_kernels"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[test]]
 name = "interop_memory"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[test]]
 name = "interop_roundtrip"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[test]]
 name = "interop_transfers"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[test]]
 name = "interop_slang"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[example]]
 name = "slang_spirv"
 
 [[example]]
 name = "slang_cudarc"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[example]]
 name = "slang_interop"
-required-features = ["cudarc"]
+required-features = ["cuda"]
 
 [[test]]
 name = "features"

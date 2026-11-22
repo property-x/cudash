@@ -17,7 +17,7 @@ struct MyCoolRustStruct {
 unsafe impl DeviceRepr for MyCoolRustStruct {}
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_file(concat!(

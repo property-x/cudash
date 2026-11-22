@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 
 use cudash::{
-    driver::{self, CudaContext, Spirv},
+    driver::{self, GpuContext, Spirv},
     interop::{
         AsCuda, Error,
         cudarc::driver::{DeviceSlice, LaunchConfig, PushKernelArg},
@@ -61,7 +61,7 @@ fn lending_on_a_stream_of_a_second_cudash_context_works() -> cudash::interop::Re
     let Some(_gpu) = nvidia() else {
         return Ok(());
     };
-    let other = CudaContext::new(0)?;
+    let other = GpuContext::new(0)?;
     let mut buf = other.default_stream().clone_htod(&[1u32, 2, 3, 4])?;
     let cuda = other.as_cuda()?.new_stream()?;
     assert_eq!(cuda.clone_dtoh(&buf.as_cuda_with(&cuda)?)?, [1, 2, 3, 4]);
@@ -225,7 +225,7 @@ fn lending_a_mutable_sub_range_writes_only_that_range() -> cudash::interop::Resu
     Ok(())
 }
 
-/// Reading through a lent `CudaView` sees the view's range, not the start of the buffer.
+/// Reading through a lent `GpuView` sees the view's range, not the start of the buffer.
 #[test]
 fn lending_a_sub_range_view_reads_only_that_range() -> cudash::interop::Result<()> {
     let Some(gpu) = nvidia() else {

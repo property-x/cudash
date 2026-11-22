@@ -6,19 +6,19 @@ use super::{
     DriverError,
     device::Device,
     host::Registry,
-    stream::{CudaStream, StreamCore},
+    stream::{GpuStream, StreamCore},
 };
 
-/// A handle to one GPU, like cudarc's `CudaContext`.
-pub struct CudaContext {
+/// A handle to one GPU, like cudarc's `GpuContext`.
+pub struct GpuContext {
     pub(crate) device: Arc<Device>,
     default_core: Arc<StreamCore>,
     pub(crate) registered: Registry,
 }
 
-impl std::fmt::Debug for CudaContext {
+impl std::fmt::Debug for GpuContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaContext")
+        f.debug_struct("GpuContext")
             .field("ordinal", &self.device.ordinal)
             .field("name", &self.device.name())
             .finish_non_exhaustive()
@@ -26,15 +26,15 @@ impl std::fmt::Debug for CudaContext {
 }
 
 /// Contexts are equal when they share a Vulkan device. Unlike CUDA's primary context, two
-/// `CudaContext::new(0)` calls create two devices, so they aren't equal.
-impl PartialEq for CudaContext {
+/// `GpuContext::new(0)` calls create two devices, so they aren't equal.
+impl PartialEq for GpuContext {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.device, &other.device)
     }
 }
-impl Eq for CudaContext {}
+impl Eq for GpuContext {}
 
-impl CudaContext {
+impl GpuContext {
     /// Creates a context on the GPU with this ordinal. Discrete GPUs come first.
     ///
     /// Requires Vulkan 1.3.
@@ -77,13 +77,13 @@ impl CudaContext {
     }
 
     /// The context's shared default stream. All handles run on the same stream.
-    pub fn default_stream(self: &Arc<Self>) -> Arc<CudaStream> {
-        CudaStream::new(self, self.default_core.clone())
+    pub fn default_stream(self: &Arc<Self>) -> Arc<GpuStream> {
+        GpuStream::new(self, self.default_core.clone())
     }
 
     /// A new, independent stream.
-    pub fn new_stream(self: &Arc<Self>) -> Result<Arc<CudaStream>, DriverError> {
-        Ok(CudaStream::new(
+    pub fn new_stream(self: &Arc<Self>) -> Result<Arc<GpuStream>, DriverError> {
+        Ok(GpuStream::new(
             self,
             StreamCore::new(&self.device, None, "new_stream")?,
         ))

@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-use cudash::driver::{CudaContext, Spirv};
+use cudash::driver::{GpuContext, Spirv};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let src = concat!(
@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Unlike NVRTC, slangc can't tell us the result is loadable, so check that too.
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let module = ctx.load_module(Spirv::from_file(&spv))?;
     module.load_function("sin_kernel")?;
     std::fs::remove_file(&spv)?;

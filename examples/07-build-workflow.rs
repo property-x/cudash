@@ -22,7 +22,7 @@ fn main() -> Result<(), DriverError> {
     // setup GPU device
     let now = Instant::now();
 
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     println!("Time taken to initialise Vulkan: {:.2?}", now.elapsed());

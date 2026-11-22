@@ -31,7 +31,7 @@ pub struct SharedSemaphore {
 
 impl SharedSemaphore {
     /// Creates a timeline semaphore on `ctx`'s GPU, usable from both APIs, starting at 0.
-    pub fn new(ctx: &crate::driver::CudaContext) -> Result<Self> {
+    pub fn new(ctx: &crate::driver::GpuContext) -> Result<Self> {
         let exporter = VulkanExporter::new(&ctx.device)?;
         let vulkan = exporter.create_semaphore()?;
         let fd = exporter.export_semaphore(&vulkan)?;

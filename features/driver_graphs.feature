@@ -1,6 +1,6 @@
 @vulkan
 Feature: Stream capture and graphs in cudash::driver
-  A capturing stream records its work instead of running it. `CudaGraph::launch` replays it,
+  A capturing stream records its work instead of running it. `GpuGraph::launch` replays it,
   as many times as asked, in stream order. See "Graphs" in plan/api.md.
 
   Background:

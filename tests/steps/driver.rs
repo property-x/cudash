@@ -54,9 +54,9 @@ fn config(n: u32, block: Option<u32>, shared: u32) -> LaunchConfig {
 
 /// Launches a kernel with the shape `(buffer, n)` on `view` of `slice`.
 fn launch_shape<T: Element>(
-    stream: &Arc<driver::CudaStream>,
-    function: &driver::CudaFunction,
-    slice: &mut driver::CudaSlice<T>,
+    stream: &Arc<driver::GpuStream>,
+    function: &driver::GpuFunction,
+    slice: &mut driver::GpuSlice<T>,
     range: (usize, usize),
     n: i32,
     cfg: LaunchConfig,
@@ -158,7 +158,7 @@ fn new_uploaded(w: &mut World, name: &str, ty: Ty, values: &[Scalar], stream_nam
 }
 
 /// Reads `buffer` back to the host on `stream`, as the result.
-fn read_into_result(w: &mut World, buffer: &str, stream: &Arc<driver::CudaStream>) {
+fn read_into_result(w: &mut World, buffer: &str, stream: &Arc<driver::GpuStream>) {
     let (values, ty) = {
         let buf = w.dbuf(buffer);
         let values = buf.read_on(stream).expect("read succeeds");
@@ -172,7 +172,7 @@ fn read_into_result(w: &mut World, buffer: &str, stream: &Arc<driver::CudaStream
 
 #[given(regex = r"^a context on the first Vulkan 1\.3 GPU$")]
 fn context_on_first_gpu(w: &mut World) {
-    let ctx = driver::CudaContext::new(0).expect("a Vulkan 1.3 GPU exists");
+    let ctx = driver::GpuContext::new(0).expect("a Vulkan 1.3 GPU exists");
     w.streams.insert("default".to_owned(), ctx.default_stream());
     w.drv = Some(ctx);
 }
@@ -187,7 +187,7 @@ fn default_stream_exists(w: &mut World) {
 
 #[given(regex = r"^at least one Vulkan 1\.3 GPU$")]
 fn at_least_one_gpu(_w: &mut World) {
-    let count = driver::CudaContext::device_count().expect("Vulkan can be queried");
+    let count = driver::GpuContext::device_count().expect("Vulkan can be queried");
     assert!(count >= 1, "this scenario needs a Vulkan 1.3 GPU");
 }
 
@@ -249,19 +249,19 @@ fn given_kernel(w: &mut World, name: String) {
 
 #[when(regex = r"^I create a context on ordinal (\d+)$")]
 fn when_context_on(w: &mut World, ordinal: usize) {
-    let outcome = driver::CudaContext::new(ordinal);
+    let outcome = driver::GpuContext::new(ordinal);
     w.drv = w.record(outcome);
 }
 
 #[when(regex = r"^I create a context on the ordinal after the last GPU$")]
 fn when_context_after_last(w: &mut World) {
-    let count = driver::CudaContext::device_count().expect("Vulkan can be queried");
+    let count = driver::GpuContext::device_count().expect("Vulkan can be queried");
     when_context_on(w, count as usize);
 }
 
 #[then(regex = r"^the device count is at least (\d+)$")]
 fn then_device_count(_w: &mut World, least: i32) {
-    assert!(driver::CudaContext::device_count().unwrap() >= least);
+    assert!(driver::GpuContext::device_count().unwrap() >= least);
 }
 
 #[then(regex = r"^the context ordinal is (\d+)$")]
@@ -496,15 +496,15 @@ fn when_copy_to_array(w: &mut World, name: String, len: usize, ty: String) {
 /// Copies a driver buffer into a host array of the same type, using `memcpy_dtoh`.
 fn download_into(
     buf: &DBuf,
-    stream: &Arc<driver::CudaStream>,
+    stream: &Arc<driver::GpuStream>,
     host: &mut [Scalar],
 ) -> Result<(), String> {
     on_buf!(buf, s => download_typed(s, stream, host))
 }
 
 fn download_typed<T: Element>(
-    slice: &driver::CudaSlice<T>,
-    stream: &Arc<driver::CudaStream>,
+    slice: &driver::GpuSlice<T>,
+    stream: &Arc<driver::GpuStream>,
     host: &mut [Scalar],
 ) -> Result<(), String> {
     let mut typed: Vec<T> = host.iter().map(|v| T::from_scalar(*v)).collect();
@@ -562,7 +562,7 @@ fn copy_views(
     dst: &mut DBuf,
     to: usize,
     count: usize,
-    stream: &Arc<driver::CudaStream>,
+    stream: &Arc<driver::GpuStream>,
 ) -> Result<(), String> {
     macro_rules! pair {
         ($($v:ident),*) => {
@@ -613,7 +613,7 @@ fn when_copy_new_sync(w: &mut World, src: String, dst: String) {
     copy_to_new(w, &src, &dst, &stream, true);
 }
 
-fn copy_to_new(w: &mut World, src: &str, dst: &str, stream: &Arc<driver::CudaStream>, sync: bool) {
+fn copy_to_new(w: &mut World, src: &str, dst: &str, stream: &Arc<driver::GpuStream>, sync: bool) {
     let buf = w.dbuf(src);
     let copy = on_buf!(buf, s => copy_new_typed(stream, s));
     if let Some(copy) = w.record(copy) {
@@ -627,8 +627,8 @@ fn copy_to_new(w: &mut World, src: &str, dst: &str, stream: &Arc<driver::CudaStr
 
 /// A new buffer holding a device copy of `src`.
 fn clone_typed<T: Element>(
-    stream: &Arc<driver::CudaStream>,
-    src: &driver::CudaSlice<T>,
+    stream: &Arc<driver::GpuStream>,
+    src: &driver::GpuSlice<T>,
 ) -> Result<DBuf, String> {
     stream
         .clone_dtod(src)
@@ -638,8 +638,8 @@ fn clone_typed<T: Element>(
 
 /// A new zeroed buffer, filled by a device copy of `src`.
 fn copy_new_typed<T: Element>(
-    stream: &Arc<driver::CudaStream>,
-    src: &driver::CudaSlice<T>,
+    stream: &Arc<driver::GpuStream>,
+    src: &driver::GpuSlice<T>,
 ) -> Result<DBuf, String> {
     let mut out = stream
         .alloc_zeros::<T>(src.len())
@@ -741,7 +741,7 @@ fn when_repeat_rounds(
 }
 
 /// Device-to-device copy of a whole buffer into an existing buffer of the same type.
-fn copy_into(w: &mut World, src: &str, dst: &str, stream: &Arc<driver::CudaStream>) {
+fn copy_into(w: &mut World, src: &str, dst: &str, stream: &Arc<driver::GpuStream>) {
     let mut target = w.dbufs.remove(dst).expect("destination exists");
     let outcome = {
         let source = w.dbufs.get(src).expect("source exists");

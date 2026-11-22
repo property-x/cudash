@@ -20,7 +20,7 @@ use crate::interop::Result;
 /// `&CudaSlice`. Dropping it waits for the CUDA stream it's bound to.
 pub struct Lent<'l, T> {
     pub(crate) cuda: Imported<T>,
-    pub(crate) _slice: PhantomData<&'l crate::driver::CudaSlice<T>>,
+    pub(crate) _slice: PhantomData<&'l crate::driver::GpuSlice<T>>,
 }
 
 /// A cudash slice or view lent to cudarc for writing, from
@@ -28,7 +28,7 @@ pub struct Lent<'l, T> {
 /// takes a `&mut CudaSlice` too. Dropping it waits for the CUDA stream it's bound to.
 pub struct LentMut<'l, T> {
     pub(crate) cuda: Imported<T>,
-    pub(crate) _slice: PhantomData<&'l mut crate::driver::CudaSlice<T>>,
+    pub(crate) _slice: PhantomData<&'l mut crate::driver::GpuSlice<T>>,
 }
 
 impl<T> LentMut<'_, T> {

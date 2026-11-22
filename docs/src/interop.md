@@ -1,6 +1,6 @@
 # Working with cudarc
 
-The `cudarc` feature adds `cudash::interop`, which lends cudash memory to real cudarc calls on NVIDIA GPUs, without
+The `cuda` feature adds `cudash::interop`, which lends cudash memory to real cudarc calls on NVIDIA GPUs, without
 copying. Vulkan exports the memory, CUDA imports it, and both see the same bytes. This lets you run cuBLAS, cuFFT or
 PTX kernels on cudash data.
 
@@ -8,7 +8,7 @@ PTX kernels on cudash data.
 use cudash::interop::AsCuda;
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = cudash::driver::CudaContext::new(0)?;
+let ctx = cudash::driver::GpuContext::new(0)?;
 let stream = ctx.default_stream();
 let mut buf = stream.alloc_zeros::<f32>(4)?;
 {
@@ -29,11 +29,11 @@ assert_eq!(stream.clone_dtoh(&buf)?, [1.0, 2.0, 3.0, 4.0]);
 | `slice.as_cuda_mut()` | Lends for writing. Waits for all cudash work using the slice |
 | `as_cuda_with(&stream)`, `as_cuda_mut_with(&stream)` | The same, bound to a CUDA stream of your choice |
 
-The lent objects, `Lent` and `LentMut`, go anywhere cudarc accepts a `&CudaSlice` (or `&mut`): they implement
+The lent objects, `Lent` and `LentMut`, go anywhere cudarc accepts a `&GpuSlice` (or `&mut`): they implement
 cudarc's `DevicePtr`, `DevicePtrMut` and `PushKernelArg`. Dropping one waits for its CUDA stream.
 
 - **The borrow checker orders the two APIs.** While a slice is lent, cudash can't use it.
-- **Views lend their own range.** A `CudaView` can only be lent for reading.
+- **Views lend their own range.** A `GpuView` can only be lent for reading.
 - **One CUDA stream per cudash stream.** Each cudash stream gets a fresh CUDA stream on first use, never the legacy
   null stream, which would serialize unrelated work. `stream.as_cuda()` returns it.
 - **The first lend of a buffer** exports and imports the whole allocation. The buffer keeps that mapping, so later
@@ -41,7 +41,7 @@ cudarc's `DevicePtr`, `DevicePtrMut` and `PushKernelArg`. Dropping one waits for
 
 ## Contexts and semaphores
 
-- `ctx.as_cuda()` returns the cudarc `CudaContext` on the same GPU, matched by UUID. Nothing touches CUDA before the
+- `ctx.as_cuda()` returns the cudarc `GpuContext` on the same GPU, matched by UUID. Nothing touches CUDA before the
   first call, and on a non-NVIDIA GPU it returns `Error::NoMatchingCudaDevice` without loading CUDA.
 - `SharedSemaphore::new(&ctx)` creates a timeline semaphore both APIs can signal and wait on, for ordering your own
   Vulkan and CUDA work by hand: `cuda_signal`, `cuda_wait`, `vk_signal`, `vk_wait` and `vk_semaphore`.

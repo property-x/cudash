@@ -1,10 +1,10 @@
 //! cudarc's `examples/09-constant-memory.rs` (MIT OR Apache-2.0) on Vulkan. cudash has no
 //! `get_global`, so the coefficients are a read-only slice passed as a kernel argument.
 
-use cudash::driver::{CudaContext, DriverError, LaunchConfig, PushKernelArg, Spirv};
+use cudash::driver::{DriverError, GpuContext, LaunchConfig, PushKernelArg, Spirv};
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     let module = ctx.load_module(Spirv::from_file(concat!(

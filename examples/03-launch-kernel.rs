@@ -1,10 +1,10 @@
 //! cudarc's `examples/03-launch-kernel.rs` (MIT OR Apache-2.0) on Vulkan. The kernel is
 //! `tests/kernels/sin_kernel.slang`, loaded as SPIR-V instead of PTX.
 
-use cudash::driver::{CudaContext, DriverError, LaunchConfig, PushKernelArg, Spirv};
+use cudash::driver::{DriverError, GpuContext, LaunchConfig, PushKernelArg, Spirv};
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
     // You can load a function from pre-compiled SPIR-V like so:

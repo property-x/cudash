@@ -137,7 +137,7 @@ nsight-capture-example name:
 build:
     cargo build
 
-# Build everything, and check the library still builds without cudarc
+# Build everything, and check the library still builds without the cuda feature
 check:
     cargo {{quiet}} check --all-targets
     cargo {{quiet}} check --no-default-features

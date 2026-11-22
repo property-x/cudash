@@ -1,6 +1,6 @@
 //! The Vulkan device behind a context, and buffers allocated from it.
 
-#[cfg(feature = "cudarc")]
+#[cfg(feature = "cuda")]
 use std::collections::HashMap;
 
 use std::{
@@ -55,7 +55,7 @@ pub(crate) struct DeviceState {
     /// Labels operations for tools such as RenderDoc, where the instance has the extension.
     pub(crate) debug_utils: Option<ext::debug_utils::Device>,
     /// The matching CUDA context, created by `interop` on first use.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub(crate) cuda: crate::interop::ContextSlot,
 }
 
@@ -142,7 +142,7 @@ fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError
 }
 
 /// Extensions cudash uses when the GPU has them: host import for registered memory, and
-/// with the `cudarc` feature, exporting memory and semaphores to CUDA.
+/// with the `cuda` feature, exporting memory and semaphores to CUDA.
 fn available_extensions(
     instance: &crate::ash::Instance,
     pd: vk::PhysicalDevice,
@@ -156,10 +156,10 @@ fn available_extensions(
         ext::memory_budget::NAME,
     ];
     wanted.extend(OPTIONAL_EXTENSIONS);
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     wanted.extend(crate::interop::EXPORT_EXTENSIONS);
-    // For `CudaSlice::export_dma_buf`, which also needs `VK_KHR_external_memory_fd` from above.
-    #[cfg(feature = "cudarc")]
+    // For `GpuSlice::export_dma_buf`, which also needs `VK_KHR_external_memory_fd` from above.
+    #[cfg(feature = "cuda")]
     wanted.push(ext::external_memory_dma_buf::NAME);
     wanted.retain(|name| have.iter().any(|e| e.extension_name_as_c_str() == Ok(name)));
     wanted
@@ -356,13 +356,10 @@ impl Device {
             None => Self::create_state(ordinal)?,
         };
         let device = Arc::new(Self(Some(state)));
-        device.set_name(
-            device.device.handle(),
-            format_args!("CudaContext {ordinal}"),
-        );
+        device.set_name(device.device.handle(), format_args!("GpuContext {ordinal}"));
         device.set_name(
             *device.queue.lock().unwrap(),
-            format_args!("CudaContext {ordinal}"),
+            format_args!("GpuContext {ordinal}"),
         );
         Ok(device)
     }
@@ -416,7 +413,7 @@ impl Device {
                 unsupported_capabilities,
                 frame_boundary,
                 debug_utils,
-                #[cfg(feature = "cudarc")]
+                #[cfg(feature = "cuda")]
                 cuda: Default::default(),
             })
         }
@@ -599,16 +596,16 @@ pub(crate) struct Buffer {
     mapped: Option<NonNull<u8>>,
     pub(crate) tracking: Mutex<Tracking>,
     /// Size of the allocation, which can exceed the buffer's. CUDA imports exactly this.
-    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     pub(crate) allocation_size: u64,
     /// `Some` if the memory can be exported as an opaque fd, holding whether it's a
     /// dedicated allocation, which CUDA has to be told.
-    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     pub(crate) export: Option<Dedicated>,
-    /// Whether the memory can also be exported as a dma-buf, for `CudaSlice::export_dma_buf`.
-    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    /// Whether the memory can also be exported as a dma-buf, for `GpuSlice::export_dma_buf`.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     pub(crate) dma_buf: bool,
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub(crate) cuda_mappings: Mutex<HashMap<usize, Arc<crate::interop::buffer::Mapping>>>,
 }
 
@@ -616,7 +613,7 @@ pub(crate) struct Buffer {
 pub(crate) struct Dedicated(pub(crate) bool);
 
 /// Whether memory for `usage` can be exported with all of `handles`, and whether the driver then
-/// only allows dedicated allocations. Needs the export extensions, which the `cudarc` feature
+/// only allows dedicated allocations. Needs the export extensions, which the `cuda` feature
 /// enables.
 fn export_support(
     device: &Device,
@@ -680,7 +677,7 @@ impl Buffer {
             allocation_size: 0,
             export: None,
             dma_buf: false,
-            #[cfg(feature = "cudarc")]
+            #[cfg(feature = "cuda")]
             cuda_mappings: Mutex::default(),
         }
     }
@@ -909,7 +906,7 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         self.cuda_mappings
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
@@ -986,13 +983,13 @@ mod tests {
         }
     }
 
-    /// With the `cudarc` feature, device memory is exportable wherever the driver can export
+    /// With the `cuda` feature, device memory is exportable wherever the driver can export
     /// it, so `AsCuda` can lend it. Staging memory never is.
     #[test]
     fn device_memory_is_exportable_with_the_export_extensions() {
         let device = Device::new(0).unwrap();
         let can_export = device.extensions.contains(&khr::external_memory_fd::NAME);
-        assert!(cfg!(feature = "cudarc") || !can_export);
+        assert!(cfg!(feature = "cuda") || !can_export);
         let buffer = Buffer::device_local(&device, 1000).unwrap();
         assert_eq!(buffer.export.is_some(), can_export);
         assert!(buffer.allocation_size >= 1000);
@@ -1054,11 +1051,11 @@ mod tests {
 
     /// Where the driver can export a dma-buf, a slice allocated for it exports one that covers it.
     /// Other slices don't, so `as_image` can still bind their memory to any image.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     #[test]
     fn device_memory_exports_as_dma_buf() {
         use std::io::{Seek, SeekFrom};
-        let ctx = crate::driver::CudaContext::new(0).unwrap();
+        let ctx = crate::driver::GpuContext::new(0).unwrap();
         let stream = ctx.default_stream();
         assert!(
             stream

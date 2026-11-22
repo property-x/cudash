@@ -13,10 +13,10 @@ use crate::ash::vk;
 
 use super::{
     DriverError,
-    context::CudaContext,
+    context::GpuContext,
     device::{Buffer, Device},
-    slice::{CudaSlice, CudaView, CudaViewMut, DevicePtr, DevicePtrMut, DeviceRepr, RawRange},
-    stream::CudaStream,
+    slice::{DevicePtr, DevicePtrMut, DeviceRepr, GpuSlice, GpuView, GpuViewMut, RawRange},
+    stream::GpuStream,
 };
 
 const OP_CAPABILITY: u32 = 17;
@@ -49,14 +49,14 @@ impl Spirv {
     }
 }
 
-pub struct CudaModule {
-    ctx: Arc<CudaContext>,
+pub struct GpuModule {
+    ctx: Arc<GpuContext>,
     words: Vec<u32>,
 }
 
-impl CudaContext {
+impl GpuContext {
     /// Loads a kernel module.
-    pub fn load_module(self: &Arc<Self>, module: Spirv) -> Result<Arc<CudaModule>, DriverError> {
+    pub fn load_module(self: &Arc<Self>, module: Spirv) -> Result<Arc<GpuModule>, DriverError> {
         let bytes = match module.0 {
             SpirvKind::File(path) => std::fs::read(&path)
                 .map_err(|e| DriverError::InvalidModule(format!("{}: {e}", path.display())))?
@@ -81,7 +81,7 @@ impl CudaContext {
         if let Some(feature) = unsupported {
             return Err(DriverError::MissingFeature(feature));
         }
-        Ok(Arc::new(CudaModule {
+        Ok(Arc::new(GpuModule {
             ctx: self.clone(),
             words,
         }))
@@ -165,9 +165,9 @@ fn with_block_dim(
     Ok(patched)
 }
 
-impl CudaModule {
+impl GpuModule {
     /// Gets a kernel by its entry point name.
-    pub fn load_function(self: &Arc<Self>, name: &str) -> Result<CudaFunction, DriverError> {
+    pub fn load_function(self: &Arc<Self>, name: &str) -> Result<GpuFunction, DriverError> {
         let entry = find_entry_point(&self.words, name)?
             .ok_or_else(|| DriverError::FunctionNotFound(name.to_owned()))?;
         let device = self.ctx.device.clone();
@@ -179,7 +179,7 @@ impl CudaModule {
         let info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&ranges);
         let layout = unsafe { device.device.create_pipeline_layout(&info, None) }?;
         device.set_name(layout, format_args!("{name}"));
-        Ok(CudaFunction {
+        Ok(GpuFunction {
             inner: Arc::new(FunctionInner {
                 device,
                 layout,
@@ -193,21 +193,21 @@ impl CudaModule {
 }
 
 #[derive(Clone)]
-pub struct CudaFunction {
+pub struct GpuFunction {
     inner: Arc<FunctionInner>,
 }
 
-impl std::fmt::Debug for CudaFunction {
+impl std::fmt::Debug for GpuFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaFunction")
+        f.debug_struct("GpuFunction")
             .field("name", &self.inner.name)
             .finish_non_exhaustive()
     }
 }
 
-impl std::fmt::Debug for CudaModule {
+impl std::fmt::Debug for GpuModule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaModule")
+        f.debug_struct("GpuModule")
             .field("ctx", &self.ctx)
             .finish_non_exhaustive()
     }
@@ -305,16 +305,16 @@ impl LaunchConfig {
 /// in push constants in the order they're passed, like C function arguments: slices
 /// and views as 64-bit GPU addresses, and everything else by value.
 pub struct LaunchArgs<'a> {
-    stream: &'a CudaStream,
-    function: &'a CudaFunction,
+    stream: &'a GpuStream,
+    function: &'a GpuFunction,
     bytes: Vec<u8>,
     reads: Vec<Arc<Buffer>>,
     writes: Vec<Arc<Buffer>>,
 }
 
-impl CudaStream {
+impl GpuStream {
     /// Starts setting up a kernel launch on this stream.
-    pub fn launch_builder<'a>(&'a self, function: &'a CudaFunction) -> LaunchArgs<'a> {
+    pub fn launch_builder<'a>(&'a self, function: &'a GpuFunction) -> LaunchArgs<'a> {
         LaunchArgs {
             stream: self,
             function,
@@ -430,26 +430,26 @@ unsafe impl<'a, 'b: 'a, T: DeviceRepr> PushKernelArg<&'b T> for LaunchArgs<'a> {
     }
 }
 
-unsafe impl<'a, 'b: 'a, T> PushKernelArg<&'b CudaSlice<T>> for LaunchArgs<'a> {
-    fn arg(&mut self, arg: &'b CudaSlice<T>) -> &mut Self {
+unsafe impl<'a, 'b: 'a, T> PushKernelArg<&'b GpuSlice<T>> for LaunchArgs<'a> {
+    fn arg(&mut self, arg: &'b GpuSlice<T>) -> &mut Self {
         self.push_read(arg.raw())
     }
 }
 
-unsafe impl<'a, 'b: 'a, T> PushKernelArg<&'b mut CudaSlice<T>> for LaunchArgs<'a> {
-    fn arg(&mut self, arg: &'b mut CudaSlice<T>) -> &mut Self {
+unsafe impl<'a, 'b: 'a, T> PushKernelArg<&'b mut GpuSlice<T>> for LaunchArgs<'a> {
+    fn arg(&mut self, arg: &'b mut GpuSlice<T>) -> &mut Self {
         self.push_write(arg.raw_mut())
     }
 }
 
-unsafe impl<'a, 'b: 'a, 'c: 'b, T> PushKernelArg<&'b CudaView<'c, T>> for LaunchArgs<'a> {
-    fn arg(&mut self, arg: &'b CudaView<'c, T>) -> &mut Self {
+unsafe impl<'a, 'b: 'a, 'c: 'b, T> PushKernelArg<&'b GpuView<'c, T>> for LaunchArgs<'a> {
+    fn arg(&mut self, arg: &'b GpuView<'c, T>) -> &mut Self {
         self.push_read(arg.raw())
     }
 }
 
-unsafe impl<'a, 'b: 'a, 'c: 'b, T> PushKernelArg<&'b mut CudaViewMut<'c, T>> for LaunchArgs<'a> {
-    fn arg(&mut self, arg: &'b mut CudaViewMut<'c, T>) -> &mut Self {
+unsafe impl<'a, 'b: 'a, 'c: 'b, T> PushKernelArg<&'b mut GpuViewMut<'c, T>> for LaunchArgs<'a> {
+    fn arg(&mut self, arg: &'b mut GpuViewMut<'c, T>) -> &mut Self {
         self.push_write(arg.raw_mut())
     }
 }
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn capabilities_the_gpu_lacks_are_errors() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let load = |words: &[u32]| {
             let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
             ctx.load_module(Spirv::from_binary(bytes))

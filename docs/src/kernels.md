@@ -39,7 +39,7 @@ The same as cudarc, with `Spirv` in place of `Ptx`:
 use cudash::driver::*;
 
 # fn main() -> Result<(), DriverError> {
-let ctx = CudaContext::new(0)?;
+let ctx = GpuContext::new(0)?;
 let stream = ctx.default_stream();
 let module = ctx.load_module(Spirv::from_file("double_all.spv"))?;
 let f = module.load_function("double_all")?;

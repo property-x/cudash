@@ -6,7 +6,7 @@ viewer.
 ```rust
 # use cudash::driver::*;
 # fn main() -> Result<(), DriverError> {
-# let stream = CudaContext::new(0)?.default_stream();
+# let stream = GpuContext::new(0)?.default_stream();
 let mut pixels = stream.clone_htod(&vec![[255u8, 0, 0, 255]; 64 * 32])?;
 let mut image = pixels.to_image(64, 32)?;   // a copy, R8G8B8A8_UNORM
 stream.memcpy_htod(&vec![[0u8, 0, 255, 255]; 64 * 32], &mut pixels)?;
@@ -18,7 +18,7 @@ println!("{:?} {}x{}", image.vk_format(), image.width(), image.height());
 
 | Call | What it does |
 |---|---|
-| `slice.to_image(width, height)` | Copies the slice into a new `CudaImage<T>`, on the slice's stream |
+| `slice.to_image(width, height)` | Copies the slice into a new `GpuImage<T>`, on the slice's stream |
 | `stream.clone_to_image(&slice, width, height)` | The same, on a stream of your choice |
 | `stream.imgcpy_dtod(&slice, &mut image)` | Copies a slice into an existing image |
 | `slice.as_image(width, height)` | Copies nothing: the image is a view of the slice's memory, so later writes to the slice show in it |

@@ -1,12 +1,12 @@
 # Streams
 
-A `CudaStream` is ordered GPU work, as in cudarc: everything queued on it runs in call order, and most calls return
+A `GpuStream` is ordered GPU work, as in cudarc: everything queued on it runs in call order, and most calls return
 before the GPU has finished.
 
 ```rust
 # use cudash::driver::*;
 # fn main() -> Result<(), DriverError> {
-let ctx = CudaContext::new(0)?;
+let ctx = GpuContext::new(0)?;
 let stream = ctx.default_stream();   // shared, like cudarc's default stream
 let other = ctx.new_stream()?;       // independent of `stream`
 let after = stream.fork()?;          // starts after work already on `stream`

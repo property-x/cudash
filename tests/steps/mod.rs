@@ -19,15 +19,15 @@ pub use world::World;
 fn nvidia_present() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
     *PRESENT
-        .get_or_init(|| cudash::driver::CudaContext::new(0).is_ok_and(|ctx| ctx.as_cuda().is_ok()))
+        .get_or_init(|| cudash::driver::GpuContext::new(0).is_ok_and(|ctx| ctx.as_cuda().is_ok()))
 }
 
 fn non_nvidia_present() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
     *PRESENT.get_or_init(|| {
-        let count = cudash::driver::CudaContext::device_count().unwrap_or(0);
+        let count = cudash::driver::GpuContext::device_count().unwrap_or(0);
         (0..count as usize)
-            .filter_map(|ordinal| cudash::driver::CudaContext::new(ordinal).ok())
+            .filter_map(|ordinal| cudash::driver::GpuContext::new(ordinal).ok())
             .any(|ctx| {
                 let props = unsafe {
                     ctx.vk_instance()
@@ -44,7 +44,7 @@ fn gpu_has(name: &str) -> bool {
     use cudash::ash::vk;
     #[cfg(feature = "ash_latest")]
     use push_next::PushNext as _;
-    let ctx = cudash::driver::CudaContext::new(0).expect("a Vulkan 1.3 GPU");
+    let ctx = cudash::driver::GpuContext::new(0).expect("a Vulkan 1.3 GPU");
     let (
         mut atomic,
         mut atomic2,
@@ -102,7 +102,7 @@ fn gpu_has(name: &str) -> bool {
 fn gpu_has_latest(name: &str) -> bool {
     use cudash::ash::vk;
     use push_next::PushNext as _;
-    let ctx = cudash::driver::CudaContext::new(0).expect("a Vulkan 1.3 GPU");
+    let ctx = cudash::driver::GpuContext::new(0).expect("a Vulkan 1.3 GPU");
     let extension = match name {
         n if n.starts_with("bfloat16") => c"VK_KHR_shader_bfloat16",
         n if n.starts_with("float8") => c"VK_EXT_shader_float8",

@@ -1,9 +1,9 @@
 //! Graphs through stream capture, like cudarc's `graph.rs`: work queued while a stream captures
-//! is recorded into reusable command buffers, and [`CudaGraph::launch`] submits them again.
+//! is recorded into reusable command buffers, and [`GpuGraph::launch`] submits them again.
 
 use std::{fmt, sync::Arc};
 
-#[cfg(feature = "cudarc")]
+#[cfg(feature = "cuda")]
 use super::stream::semaphore_info;
 
 use crate::ash::vk;
@@ -11,7 +11,7 @@ use crate::ash::vk;
 use super::{
     DriverError,
     device::{Buffer, Device},
-    stream::{CudaStream, Keep, StreamCore, required_waits},
+    stream::{GpuStream, Keep, StreamCore, required_waits},
     sys,
 };
 
@@ -20,7 +20,7 @@ pub(crate) enum Part {
     /// Recorded Vulkan work. `None` only orders the parts around it.
     Vulkan(Option<vk::CommandBuffer>),
     /// Work captured on the paired CUDA stream.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     Cuda(crate::interop::graph::CudaPart),
 }
 
@@ -29,14 +29,14 @@ pub(crate) struct Capture {
     /// Becomes the graph's, and owns the command pool, so dropping a capture frees it.
     rec: Recorded,
     /// Passed on to the paired CUDA stream's capture.
-    #[cfg_attr(not(feature = "cudarc"), allow(dead_code))]
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     mode: sys::CUstreamCaptureMode,
     /// Why the capture was invalidated, if it was.
     invalid: Option<String>,
     /// The command buffer being recorded into, once something has been.
     current: Option<vk::CommandBuffer>,
     /// The paired CUDA stream, once it's capturing too.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub(crate) cuda: Option<Arc<cudarc::driver::CudaStream>>,
 }
 
@@ -49,7 +49,7 @@ impl Capture {
         ))
     }
 
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub(crate) fn mode(&self) -> sys::CUstreamCaptureMode {
         self.mode
     }
@@ -70,7 +70,7 @@ impl Capture {
             )));
         }
         // CUDA work queued since the last operation goes between it and this one.
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         match crate::interop::graph::end_part(self) {
             Ok(Some(part)) => {
                 self.close_vulkan()?;
@@ -124,7 +124,7 @@ impl Capture {
     }
 
     /// Registers a buffer that work outside these command buffers uses, such as a lend.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     pub(crate) fn uses(&mut self, buffer: &Arc<Buffer>, write: bool) {
         let list = if write {
             &mut self.rec.writes
@@ -137,7 +137,7 @@ impl Capture {
 
 impl Drop for Capture {
     fn drop(&mut self) {
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         crate::interop::graph::abandon(self);
     }
 }
@@ -153,7 +153,7 @@ struct Recorded {
     writes: Vec<Arc<Buffer>>,
     keep: Vec<Keep>,
     /// Joins Vulkan and CUDA parts, once the graph has any.
-    #[cfg(feature = "cudarc")]
+    #[cfg(feature = "cuda")]
     shared: Option<crate::interop::SharedSemaphore>,
 }
 
@@ -166,7 +166,7 @@ impl Recorded {
             reads: Vec::new(),
             writes: Vec::new(),
             keep: Vec::new(),
-            #[cfg(feature = "cudarc")]
+            #[cfg(feature = "cuda")]
             shared: None,
         }
     }
@@ -181,22 +181,22 @@ impl Drop for Recorded {
     }
 }
 
-/// A replayable graph, like cudarc's `CudaGraph`. Create with [`CudaStream::begin_capture`] and
-/// [`CudaStream::end_capture`], and replay with [`Self::launch`].
-pub struct CudaGraph {
+/// A replayable graph, like cudarc's `GpuGraph`. Create with [`GpuStream::begin_capture`] and
+/// [`GpuStream::end_capture`], and replay with [`Self::launch`].
+pub struct GpuGraph {
     recorded: Arc<Recorded>,
-    stream: Arc<CudaStream>,
+    stream: Arc<GpuStream>,
 }
 
-impl fmt::Debug for CudaGraph {
+impl fmt::Debug for GpuGraph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CudaGraph")
+        f.debug_struct("GpuGraph")
             .field("parts", &self.recorded.parts.len())
             .finish_non_exhaustive()
     }
 }
 
-impl CudaStream {
+impl GpuStream {
     /// Starts recording this stream's work instead of running it. See "Graphs" in the crate's
     /// `plan/api.md` for which calls can be captured. Under `cudarc`, the paired CUDA stream
     /// captures too, with the same `mode`.
@@ -218,15 +218,15 @@ impl CudaStream {
             mode,
             invalid: None,
             current: None,
-            #[cfg(feature = "cudarc")]
+            #[cfg(feature = "cuda")]
             cuda: None,
         });
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         if let Err(e) = crate::interop::graph::begin(core, capture) {
             state.capture = None;
             return Err(DriverError::Cuda(e.to_string()));
         }
-        #[cfg(not(feature = "cudarc"))]
+        #[cfg(not(feature = "cuda"))]
         let _ = capture;
         Ok(())
     }
@@ -236,7 +236,7 @@ impl CudaStream {
     pub fn end_capture(
         self: &Arc<Self>,
         flags: sys::CUgraphInstantiate_flags,
-    ) -> Result<Option<CudaGraph>, DriverError> {
+    ) -> Result<Option<GpuGraph>, DriverError> {
         let (capture, invalid) = self.take_capture()?;
         if invalid.is_some() {
             return Ok(None);
@@ -252,14 +252,14 @@ impl CudaStream {
     pub fn end_capture_partial(
         self: &Arc<Self>,
         flags: sys::CUgraphInstantiate_flags,
-    ) -> Result<(CudaGraph, Option<DriverError>), DriverError> {
+    ) -> Result<(GpuGraph, Option<DriverError>), DriverError> {
         let (capture, invalid) = self.take_capture()?;
         Ok((self.build(capture, flags)?, invalid))
     }
 
     /// Ends the capture, and returns it with the error that invalidated it, if any.
     fn take_capture(&self) -> Result<(Capture, Option<DriverError>), DriverError> {
-        #[cfg_attr(not(feature = "cudarc"), allow(unused_mut))]
+        #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
         let mut capture = {
             let mut state = self.core.state.lock().unwrap();
             state
@@ -267,7 +267,7 @@ impl CudaStream {
                 .take()
                 .ok_or_else(|| DriverError::StreamCapture("the stream isn't capturing".into()))?
         };
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         {
             // Always ends the CUDA capture. Its work after a cudash call was refused doesn't
             // belong in a partial graph.
@@ -293,8 +293,8 @@ impl CudaStream {
         self: &Arc<Self>,
         mut capture: Capture,
         flags: sys::CUgraphInstantiate_flags,
-    ) -> Result<CudaGraph, DriverError> {
-        #[cfg(not(feature = "cudarc"))]
+    ) -> Result<GpuGraph, DriverError> {
+        #[cfg(not(feature = "cuda"))]
         let _ = flags;
         capture.close_vulkan()?;
         let device = capture.rec.device.clone();
@@ -307,7 +307,7 @@ impl CudaStream {
         if !matches!(rec.parts.last(), Some(Part::Vulkan(_))) {
             rec.parts.push(Part::Vulkan(None));
         }
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         {
             for part in &mut rec.parts {
                 if let Part::Cuda(part) = part {
@@ -321,7 +321,7 @@ impl CudaStream {
                 rec.shared = Some(shared);
             }
         }
-        Ok(CudaGraph {
+        Ok(GpuGraph {
             recorded: Arc::new(rec),
             stream: self.clone(),
         })
@@ -338,7 +338,7 @@ impl CudaStream {
     }
 }
 
-impl CudaGraph {
+impl GpuGraph {
     /// Queues a replay on the stream it was captured on, after the stream's earlier work and
     /// other streams' uses of the graph's buffers. Replays of one graph never overlap.
     pub fn launch(&self) -> Result<(), DriverError> {
@@ -347,15 +347,15 @@ impl CudaGraph {
         let mut state = core.state.lock().unwrap();
         core.reclaim(&mut state)?;
         if let Some(capture) = &mut state.capture {
-            return Err(capture.invalidate("CudaGraph::launch"));
+            return Err(capture.invalidate("GpuGraph::launch"));
         }
         let reads: Vec<_> = recorded.reads.iter().collect();
         let writes: Vec<_> = recorded.writes.iter().collect();
         let last = recorded.parts.len() - 1;
         // The value the next Vulkan part waits for, which CUDA signals.
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         let mut cuda_done: Option<u64> = None;
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         let mut vulkan_done = 0;
         for (i, part) in recorded.parts.iter().enumerate() {
             match part {
@@ -368,7 +368,7 @@ impl CudaGraph {
                     };
                     // Waits for the CUDA part before, and signals the one after.
                     let (mut extra_waits, mut extra_signals) = (Vec::new(), Vec::new());
-                    #[cfg(feature = "cudarc")]
+                    #[cfg(feature = "cuda")]
                     if let Some(shared) = &recorded.shared {
                         let semaphore = shared.vk_semaphore();
                         extra_waits.extend(cuda_done.take().map(|v| semaphore_info(semaphore, v)));
@@ -377,7 +377,7 @@ impl CudaGraph {
                             extra_signals.push(semaphore_info(semaphore, vulkan_done));
                         }
                     }
-                    #[cfg(not(feature = "cudarc"))]
+                    #[cfg(not(feature = "cuda"))]
                     let _ = (&mut extra_waits, &mut extra_signals);
                     let tracked: (&[_], &[_]) = if final_part {
                         (&reads, &writes)
@@ -396,7 +396,7 @@ impl CudaGraph {
                         false,
                     )?;
                 }
-                #[cfg(feature = "cudarc")]
+                #[cfg(feature = "cuda")]
                 Part::Cuda(part) => {
                     let shared = recorded.shared.as_ref().expect("made with every CUDA part");
                     let done = part
@@ -412,7 +412,7 @@ impl CudaGraph {
     /// Does nothing for Vulkan parts, which need no upload. Under `cudarc`, uploads CUDA parts.
     pub fn upload(&self) -> Result<(), DriverError> {
         // Parts aren't thread-safe, so this takes the lock `launch` does.
-        #[cfg(feature = "cudarc")]
+        #[cfg(feature = "cuda")]
         {
             let _state = self.stream.core.state.lock().unwrap();
             for part in &self.recorded.parts {
@@ -429,7 +429,7 @@ impl CudaGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::{CudaContext, LaunchConfig, PushKernelArg, Spirv};
+    use crate::driver::{GpuContext, LaunchConfig, PushKernelArg, Spirv};
     use sys::{CUgraphInstantiate_flags as Flags, CUstreamCaptureMode, CUstreamCaptureStatus};
 
     const DOUBLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/double_all.spv"));
@@ -439,7 +439,7 @@ mod tests {
     /// whatever was queued before them.
     #[test]
     fn replays_repeat_the_captured_work() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let mut data = stream.clone_htod(&[1u32; 4]).unwrap();
         stream.begin_capture(RELAXED).unwrap();
@@ -462,7 +462,7 @@ mod tests {
     /// overlap: each one doubles twice, then copies.
     #[test]
     fn recorded_operations_and_replays_stay_in_order() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let module = ctx.load_module(Spirv::from_binary(DOUBLE)).unwrap();
         let double = module.load_function("double_all").unwrap();
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn other_streams_wait_for_replays() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let other = ctx.new_stream().unwrap();
         let mut data = stream.clone_htod(&[7u8; 1 << 20]).unwrap();
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn calls_that_cant_be_captured_invalidate_it() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let mut data = stream.alloc_zeros::<u32>(4).unwrap();
         stream.begin_capture(RELAXED).unwrap();
@@ -526,7 +526,7 @@ mod tests {
     /// A partial capture replays what was recorded before the call that invalidated it.
     #[test]
     fn partial_captures_keep_what_was_recorded() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let mut a = stream.clone_htod(&[1u32; 4]).unwrap();
         let mut b = stream.clone_htod(&[1u32; 4]).unwrap();
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn capture_calls_out_of_turn_are_errors() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         assert!(stream.end_capture(Flags(0)).is_err());
         stream.begin_capture(RELAXED).unwrap();
@@ -568,7 +568,7 @@ mod tests {
     /// The graph keeps what it uses, including staging made at capture time.
     #[test]
     fn graphs_keep_their_buffers_alive() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let mut data = stream.clone_htod(&[9u8; 7]).unwrap();
         let mut pinned = unsafe { ctx.alloc_pinned::<u8>(7) }.unwrap();
@@ -596,7 +596,7 @@ mod tests {
     /// Each replay writes the pinned memory again, and its accessors wait for that replay.
     #[test]
     fn pinned_readback_is_captured() {
-        let ctx = CudaContext::new(0).unwrap();
+        let ctx = GpuContext::new(0).unwrap();
         let stream = ctx.new_stream().unwrap();
         let mut data = stream.clone_htod(&[1u128]).unwrap();
         let mut input = unsafe { ctx.alloc_pinned::<u128>(1) }.unwrap();

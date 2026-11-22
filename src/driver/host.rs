@@ -8,21 +8,21 @@ use std::{
 
 use super::{
     DriverError,
-    context::CudaContext,
+    context::GpuContext,
     device::Buffer,
     slice::{DeviceRepr, HostSlice, RawRange, ValidAsZeroBits},
     stream::wait_for_gpu,
 };
 
 /// Host memory the GPU can copy to and from without staging, like cudarc's
-/// `PinnedHostSlice`. Allocate with [`CudaContext::alloc_pinned`].
+/// `PinnedHostSlice`. Allocate with [`GpuContext::alloc_pinned`].
 ///
 /// Copies into and out of it don't wait for the GPU. The accessors do, so they never see
 /// a copy half done.
 pub struct PinnedHostSlice<T> {
     buffer: Arc<Buffer>,
     len: usize,
-    ctx: Arc<CudaContext>,
+    ctx: Arc<GpuContext>,
     marker: PhantomData<T>,
 }
 
@@ -38,7 +38,7 @@ impl<T> std::fmt::Debug for PinnedHostSlice<T> {
 unsafe impl<T: Send> Send for PinnedHostSlice<T> {}
 unsafe impl<T: Sync> Sync for PinnedHostSlice<T> {}
 
-impl CudaContext {
+impl GpuContext {
     /// Allocates host memory that copies use directly, without staging.
     ///
     /// # Safety
@@ -66,7 +66,7 @@ impl CudaContext {
 
 impl<T> PinnedHostSlice<T> {
     /// The context this was created in.
-    pub fn context(&self) -> &Arc<CudaContext> {
+    pub fn context(&self) -> &Arc<GpuContext> {
         &self.ctx
     }
 
@@ -140,7 +140,7 @@ impl<T> HostSlice<T> for PinnedHostSlice<T> {
     }
 }
 
-/// Host memory imported for the GPU by [`CudaContext::host_register`].
+/// Host memory imported for the GPU by [`GpuContext::host_register`].
 pub(crate) struct Registration {
     /// The registered bytes, `start..end`.
     pub(crate) start: usize,
@@ -160,7 +160,7 @@ impl Drop for Registration {
 
 pub(crate) type Registry = Mutex<Vec<Registration>>;
 
-impl CudaContext {
+impl GpuContext {
     /// Lets copies read `data` directly, without staging, like CUDA's
     /// `cuMemHostRegister` (cudarc only has it in `sys`). After this, any `memcpy_htod` or
     /// `clone_htod` from inside `data` returns without waiting for the GPU or copying on

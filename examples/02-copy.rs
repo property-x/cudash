@@ -1,12 +1,12 @@
 //! cudarc's `examples/02-copy.rs` (MIT OR Apache-2.0) on Vulkan. Only the import changed.
 
-use cudash::driver::{CudaContext, CudaSlice, DriverError};
+use cudash::driver::{DriverError, GpuContext, GpuSlice};
 
 fn main() -> Result<(), DriverError> {
-    let ctx = CudaContext::new(0)?;
+    let ctx = GpuContext::new(0)?;
     let stream = ctx.default_stream();
 
-    let a: CudaSlice<f64> = stream.alloc_zeros::<f64>(10)?;
+    let a: GpuSlice<f64> = stream.alloc_zeros::<f64>(10)?;
     let mut b = stream.alloc_zeros::<f64>(10)?;
 
     // you can do device to device copies of course
