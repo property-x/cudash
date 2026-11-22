@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ash::vk;
+use crate::ash::vk;
 use cudarc::driver::{
     CudaContext, CudaStream,
     result::{self, DriverError},

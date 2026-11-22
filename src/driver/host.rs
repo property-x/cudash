@@ -48,7 +48,7 @@ impl CudaContext {
         len: usize,
     ) -> Result<PinnedHostSlice<T>, DriverError> {
         let bytes = len.checked_mul(size_of::<T>()).ok_or(DriverError::Vulkan(
-            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+            crate::ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY,
         ))?;
         let buffer = Buffer::staging(&self.device, bytes as u64)?;
         buffer.set_name(format_args!(

@@ -77,6 +77,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ash"
+version = "0.38.0+1.4.352"
+source = "git+https://github.com/ash-rs/ash#80e5856982af6651d56337f9a10e46308145c2d2"
+dependencies = [
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -273,7 +281,8 @@ dependencies = [
 name = "cudash"
 version = "0.3.0"
 dependencies = [
- "ash",
+ "ash 0.38.0+1.3.281",
+ "ash 0.38.0+1.4.352",
  "cucumber",
  "cudarc",
  "renderdoc",

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ash::vk;
+use crate::ash::vk;
 
 use super::{
     DriverError,
@@ -91,7 +91,7 @@ impl CudaContext {
     }
 
     /// The Vulkan instance, for use alongside cudash, such as rendering results.
-    pub fn vk_instance(&self) -> &ash::Instance {
+    pub fn vk_instance(&self) -> &crate::ash::Instance {
         &self.device.instance
     }
 
@@ -112,7 +112,7 @@ impl CudaContext {
     }
 
     /// The Vulkan device behind this context.
-    pub fn vk_device(&self) -> &ash::Device {
+    pub fn vk_device(&self) -> &crate::ash::Device {
         &self.device.device
     }
 }

@@ -11,7 +11,9 @@ use std::{
     },
 };
 
-use ash::vk;
+use crate::ash::vk;
+#[cfg(feature = "ash_latest")]
+use crate::compat::PushNext as _;
 
 use super::{
     DriverError,
@@ -248,7 +250,7 @@ impl StreamCore {
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
         keep: Vec<Keep>,
-        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+        record: impl FnOnce(&crate::ash::Device, vk::CommandBuffer),
     ) -> Result<(), DriverError> {
         self.submit_at(label, reads, writes, keep, false, record)
             .map(drop)
@@ -276,7 +278,7 @@ impl StreamCore {
         writes: &[&Arc<Buffer>],
         keep: Vec<Keep>,
         frame_end: bool,
-        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+        record: impl FnOnce(&crate::ash::Device, vk::CommandBuffer),
     ) -> Result<Option<Point>, DriverError> {
         let device = &self.device.device;
         let mut state = self.state.lock().unwrap();
@@ -337,7 +339,7 @@ impl StreamCore {
         &self,
         command_buffer: vk::CommandBuffer,
         label: fmt::Arguments<'_>,
-        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+        record: impl FnOnce(&crate::ash::Device, vk::CommandBuffer),
     ) {
         let utils = self.device.debug_utils.as_ref();
         if let Some(utils) = utils {

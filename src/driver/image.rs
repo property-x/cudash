@@ -9,7 +9,9 @@ use std::{
     },
 };
 
-use ash::vk;
+use crate::ash::vk;
+#[cfg(feature = "ash_latest")]
+use crate::compat::PushNext as _;
 
 use super::{
     DriverError,

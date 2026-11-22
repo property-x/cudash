@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use ash::vk;
+use crate::ash::vk;
 use cudarc::driver::{CudaContext, CudaStream, result::DriverError, sys};
 
 use crate::interop::{

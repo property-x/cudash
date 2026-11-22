@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ash::vk;
+use crate::ash::vk;
 
 use super::{
     DriverError,
@@ -63,7 +63,7 @@ impl CudaContext {
                 .into(),
             SpirvKind::Binary(bytes) => bytes,
         };
-        let words = ash::util::read_spv(&mut Cursor::new(bytes))
+        let words = crate::ash::util::read_spv(&mut Cursor::new(bytes))
             .map_err(|e| DriverError::InvalidModule(e.to_string()))?;
         if words.len() < SPIRV_HEADER_WORDS {
             return Err(DriverError::InvalidModule(

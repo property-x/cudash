@@ -9,7 +9,10 @@ keywords = ["gpu", "vulkan", "cuda"]
 categories = ["api-bindings", "hardware-support", "memory-management", "science"]
 
 [dependencies]
+# Switch between stable and rolling release of ash with `ash_latest` feature.
 ash = "0.38"
+ash_latest = { package = "ash", git = "https://github.com/ash-rs/ash", optional = true }
+
 # only needed for interop but can be enabled on non-Nvidia hardware as well.
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
 
@@ -21,6 +24,8 @@ cudarc = ["dep:cudarc"]
 # On by default. Compiles the Slang kernels with `-g`, so RenderDoc shows their source and can step
 # through a thread. This embeds the kernel source in the SPIR-V: turn it off for builds you ship.
 kernel_debug = []
+# Allows us to use latest ash features
+ash_latest = ["dep:ash_latest"]
 
 [dev-dependencies]
 cucumber = "0.23"

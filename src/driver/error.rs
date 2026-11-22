@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ash::vk;
+use crate::ash::vk;
 
 /// Everything that can go wrong in [`crate::driver`].
 #[derive(Debug, Clone, PartialEq, Eq)]

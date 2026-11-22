@@ -4,14 +4,19 @@
 //! [`driver`] mirrors `cudarc::driver`. The `cudarc` feature (on by default) enables `interop`,
 //! which works with real cudarc on NVIDIA hardware. Build with `--no-default-features` to drop it.
 
+mod compat;
 pub mod driver;
 
 /// Shares cudash memory with real cudarc on NVIDIA GPUs.
 #[cfg(feature = "cudarc")]
 pub mod interop;
 
-/// The ash version cudash's Vulkan handles (`vk_device`, `vk_buffer`, ...) come from.
+/// The ash version cudash's Vulkan handles (`vk_device`, `vk_buffer`, ...) come from: the release,
+/// or the git version with the `ash_latest` feature.
+#[cfg(not(feature = "ash_latest"))]
 pub use ash;
+#[cfg(feature = "ash_latest")]
+pub use ash_latest as ash;
 
 /// The book's chapters in `docs/src`, so `cargo test` compiles and runs their examples.
 #[cfg(doctest)]

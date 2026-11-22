@@ -10,7 +10,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ash::{ext, khr, vk};
+use crate::ash::{ext, khr, vk};
+#[cfg(feature = "ash_latest")]
+use crate::compat::PushNext as _;
+use crate::compat::load_ext;
 
 use super::{DriverError, stream::Tracking};
 
@@ -29,9 +32,9 @@ static IDLE: Mutex<Vec<DeviceState>> = Mutex::new(Vec::new());
 
 pub(crate) struct DeviceState {
     /// A handle to the process-wide instance from [`instance`], which is never destroyed.
-    pub(crate) instance: ash::Instance,
+    pub(crate) instance: crate::ash::Instance,
     pub(crate) physical_device: vk::PhysicalDevice,
-    pub(crate) device: ash::Device,
+    pub(crate) device: crate::ash::Device,
     pub(crate) queue: Mutex<vk::Queue>,
     pub(crate) queue_family: u32,
     pub(crate) properties: vk::PhysicalDeviceProperties,
@@ -64,8 +67,8 @@ struct HostImport {
 /// because destroying the last instance unloads the driver, and NVIDIA's driver stops
 /// loading after a few dozen unloads.
 struct Vulkan {
-    _entry: ash::Entry,
-    instance: ash::Instance,
+    _entry: crate::ash::Entry,
+    instance: crate::ash::Instance,
     /// Whether `VK_EXT_debug_utils` is on, for labels in tools such as RenderDoc.
     debug_utils: bool,
 }
@@ -84,7 +87,7 @@ fn vulkan() -> Result<&'static Vulkan, DriverError> {
 
 fn create_instance() -> Result<Vulkan, DriverError> {
     unsafe {
-        let entry = ash::Entry::load().map_err(|e| DriverError::NoVulkan(e.to_string()))?;
+        let entry = crate::ash::Entry::load().map_err(|e| DriverError::NoVulkan(e.to_string()))?;
         let app = vk::ApplicationInfo::default().api_version(API_VERSION);
         let available = entry.enumerate_instance_extension_properties(None)?;
         let has = |name| {
@@ -138,11 +141,11 @@ fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError
 
 /// Extensions cudash uses when the GPU has them: host import for registered memory, and
 /// with the `cudarc` feature, exporting memory and semaphores to CUDA.
-fn available_extensions(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Vec<&'static CStr> {
+fn available_extensions(instance: &crate::ash::Instance, pd: vk::PhysicalDevice) -> Vec<&'static CStr> {
     let have = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
     let mut wanted = vec![
         ext::external_memory_host::NAME,
-        khr::portability_subset::NAME,
+        c"VK_KHR_portability_subset",
         ext::frame_boundary::NAME,
     ];
     wanted.extend(OPTIONAL_EXTENSIONS);
@@ -155,7 +158,7 @@ fn available_extensions(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Vec
     wanted
 }
 
-fn compute_queue_family(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Option<u32> {
+fn compute_queue_family(instance: &crate::ash::Instance, pd: vk::PhysicalDevice) -> Option<u32> {
     unsafe { instance.get_physical_device_queue_family_properties(pd) }
         .iter()
         .position(|q| q.queue_flags.contains(vk::QueueFlags::COMPUTE))
@@ -177,6 +180,23 @@ fn missing_required_feature(
     .find_map(|(name, enabled)| (enabled != vk::TRUE).then_some(name))
 }
 
+/// Turns off the queried features that would slow kernels down or change how memory is
+/// allocated, and that CUDA has no equivalent for.
+fn switch_off(
+    features: &mut vk::PhysicalDeviceFeatures,
+    v12: &mut vk::PhysicalDeviceVulkan12Features,
+    v13: &mut vk::PhysicalDeviceVulkan13Features,
+) {
+    // Bounds checks on every buffer access slow all kernels down; CUDA doesn't check either.
+    features.robust_buffer_access = vk::FALSE;
+    // The same bounds checks for images; CUDA's out-of-bounds handling comes from the sampler.
+    v13.robust_image_access = vk::FALSE;
+    // Only capture tools need fixed buffer addresses, and they turn this on themselves.
+    v12.buffer_device_address_capture_replay = vk::FALSE;
+    // cudash has no device groups, and the driver may allocate differently with it on.
+    v12.buffer_device_address_multi_device = vk::FALSE;
+}
+
 /// SPIR-V `Capability` values for the core features, named and numbered as in Khronos's
 /// `spirv.core.grammar.json`. `extensions.rs` gives those of the extensions with each entry.
 #[allow(non_upper_case_globals)]
@@ -194,16 +214,16 @@ mod spirv_capability {
 /// Defines what `extensions.rs` lists:
 /// `OPTIONAL_EXTENSIONS`, and `OptionalFeatures` with one feature struct per extension.
 macro_rules! optional_extensions {
-    ($($name:literal => $features:ident {
+    ($($(#[$meta:meta])* $name:literal => $features:ident {
         capabilities: [$($capability:ident($id:literal): [$($bit:ident),* $(,)?]),* $(,)?],
         off: [$($off:ident),* $(,)?] $(,)?
     }),* $(,)?) => {
-        const OPTIONAL_EXTENSIONS: &[&CStr] = &[$($name),*];
+        const OPTIONAL_EXTENSIONS: &[&CStr] = &[$($(#[$meta])* $name),*];
 
         #[allow(non_snake_case)]
         #[derive(Default)]
         struct OptionalFeatures {
-            $($features: vk::$features<'static>,)*
+            $($(#[$meta])* $features: vk::$features<'static>,)*
         }
 
         impl OptionalFeatures {
@@ -214,25 +234,32 @@ macro_rules! optional_extensions {
                 mut features: vk::PhysicalDeviceFeatures2<'a>,
                 extensions: &[&CStr],
             ) -> vk::PhysicalDeviceFeatures2<'a> {
-                $(if extensions.contains(&$name) {
-                    self.$features.p_next = std::ptr::null_mut();
-                    features = features.push_next(&mut self.$features);
+                $($(#[$meta])* {
+                    if extensions.contains(&$name) {
+                        self.$features.p_next = std::ptr::null_mut();
+                        features = features.push_next(&mut self.$features);
+                    }
                 })*
                 features
             }
 
             /// Clears the bits listed under `off`.
             fn turn_off(&mut self) {
-                $($(self.$features.$off = vk::FALSE;)*)*
+                $($(#[$meta])* {
+                    $(self.$features.$off = vk::FALSE;)*
+                })*
             }
 
             /// `(capability, name, whether any of its bits is on)` for every listed capability.
             fn capabilities(&self) -> Vec<(u32, &'static str, vk::Bool32)> {
-                vec![$($((
+                #[allow(unused_mut)]
+                let mut all: Vec<(u32, &'static str, vk::Bool32)> = Vec::new();
+                $($(#[$meta])* all.extend_from_slice(&[$((
                     $id,
                     stringify!($capability),
                     0 $(| self.$features.$bit)*,
-                ),)*)*]
+                )),*]);)*
+                all
             }
         }
     };
@@ -357,9 +384,9 @@ impl Device {
             let properties = properties.properties;
             let debug_utils = vulkan
                 .debug_utils
-                .then(|| ext::debug_utils::Device::new(instance, &device));
+                .then(|| load_ext!(ext::debug_utils::Device, instance, &device));
             let host_import = has_host_import.then(|| HostImport {
-                functions: ext::external_memory_host::Device::new(instance, &device),
+                functions: load_ext!(ext::external_memory_host::Device, instance, &device),
                 alignment: import.min_imported_host_pointer_alignment,
             });
             Ok(DeviceState {
@@ -385,15 +412,16 @@ impl Device {
         }
     }
 
-    /// Enables every feature the GPU has, since a kernel could use any of them.
+    /// Enables every feature the GPU has, since a kernel could use any of them, except those
+    /// [`switch_off`] lists.
     #[allow(clippy::type_complexity)]
     unsafe fn create(
-        instance: &ash::Instance,
+        instance: &crate::ash::Instance,
         pd: vk::PhysicalDevice,
         extensions: &[&CStr],
     ) -> Result<
         (
-            ash::Device,
+            crate::ash::Device,
             u32,
             vk::PhysicalDevice,
             bool,
@@ -439,8 +467,7 @@ impl Device {
             }
             let unsupported =
                 unsupported_capabilities(&features, &v11, &v12, optional.capabilities());
-            // Slows everything down, and CUDA has no equivalent.
-            features.robust_buffer_access = vk::FALSE;
+            switch_off(&mut features, &mut v12, &mut v13);
             optional.turn_off();
             let frame_boundary_enabled = frame_boundary.frame_boundary == vk::TRUE;
             let mut features = chain!(vk::PhysicalDeviceFeatures2::default().features(features));
@@ -863,6 +890,25 @@ impl Drop for Buffer {
 mod tests {
     use super::*;
 
+    #[test]
+    fn robustness_and_capture_replay_stay_off() {
+        let mut features = vk::PhysicalDeviceFeatures {
+            robust_buffer_access: vk::TRUE,
+            ..Default::default()
+        };
+        let mut v12 = vk::PhysicalDeviceVulkan12Features::default()
+            .buffer_device_address(true)
+            .buffer_device_address_capture_replay(true)
+            .buffer_device_address_multi_device(true);
+        let mut v13 = vk::PhysicalDeviceVulkan13Features::default().robust_image_access(true);
+        switch_off(&mut features, &mut v12, &mut v13);
+        assert_eq!(features.robust_buffer_access, vk::FALSE);
+        assert_eq!(v13.robust_image_access, vk::FALSE);
+        assert_eq!(v12.buffer_device_address_capture_replay, vk::FALSE);
+        assert_eq!(v12.buffer_device_address_multi_device, vk::FALSE);
+        assert_eq!(v12.buffer_device_address, vk::TRUE);
+    }
+
     /// Every capability number cudash checks is the one Khronos's grammar gives its name.
     /// Fails if the number does not match the name according to khronos grammar.
     #[test]
@@ -911,7 +957,7 @@ mod tests {
             panic!("the driver has the extension, but can't export this buffer");
         };
         let vk_device = &device.device;
-        let fd_functions = khr::external_memory_fd::Device::new(&device.instance, vk_device);
+        let fd_functions = load_ext!(khr::external_memory_fd::Device, &device.instance, vk_device);
         unsafe {
             let info = vk::MemoryGetFdInfoKHR::default()
                 .memory(buffer.memory)

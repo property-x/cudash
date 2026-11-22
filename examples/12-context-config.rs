@@ -1,14 +1,21 @@
 //! cudarc's `examples/12-context-config.rs` (MIT OR Apache-2.0) on Vulkan. CUDA's limits and
 //! cache settings have no equivalent, and Vulkan's limits are fixed, so this only reads them.
 
-use ash::vk;
+use cudash::ash::vk;
 use cudash::driver::{CudaContext, DriverError};
 
 fn main() -> Result<(), DriverError> {
     let dev = CudaContext::new(0)?;
 
     let mut maintenance3 = vk::PhysicalDeviceMaintenance3Properties::default();
+    #[cfg(not(feature = "ash_latest"))]
     let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut maintenance3);
+    // `ash` from git renamed `push_next` to `push`.
+    #[cfg(feature = "ash_latest")]
+    let mut properties = {
+        use vk::TaggedStructure;
+        vk::PhysicalDeviceProperties2::default().push(&mut maintenance3)
+    };
     unsafe {
         dev.vk_instance()
             .get_physical_device_properties2(dev.vk_physical_device(), &mut properties)

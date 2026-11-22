@@ -6,7 +6,7 @@ use std::{fmt, sync::Arc};
 #[cfg(feature = "cudarc")]
 use super::stream::semaphore_info;
 
-use ash::vk;
+use crate::ash::vk;
 
 use super::{
     DriverError,
@@ -62,7 +62,7 @@ impl Capture {
         reads: &[&Arc<Buffer>],
         writes: &[&Arc<Buffer>],
         keep: Vec<Keep>,
-        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+        record: impl FnOnce(&crate::ash::Device, vk::CommandBuffer),
     ) -> Result<(), DriverError> {
         if let Some(op) = &self.invalid {
             return Err(DriverError::StreamCapture(format!(
