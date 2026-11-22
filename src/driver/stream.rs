@@ -47,7 +47,8 @@ impl Point {
         let info = vk::SemaphoreWaitInfo::default()
             .semaphores(&semaphores)
             .values(&values);
-        unsafe { self.timeline.device.device.wait_semaphores(&info, u64::MAX) }?;
+        let device = &self.timeline.device;
+        unsafe { device.device.wait_semaphores(&info, u64::MAX) }.map_err(|e| device.error(e))?;
         Ok(())
     }
 }
@@ -170,7 +171,8 @@ impl StreamCore {
 
     pub(crate) fn reclaim(&self, state: &mut State) -> Result<(), DriverError> {
         let device = &self.device.device;
-        let done = unsafe { device.get_semaphore_counter_value(self.timeline.semaphore) }?;
+        let done = unsafe { device.get_semaphore_counter_value(self.timeline.semaphore) }
+            .map_err(|e| self.device.error(e))?;
         while state.pending.front().is_some_and(|p| p.value <= done) {
             let finished = state.pending.pop_front().expect("checked by the loop");
             let Some(command_buffer) = finished.command_buffer else {
@@ -409,7 +411,8 @@ impl StreamCore {
                 self.device
                     .device
                     .queue_submit2(*queue, &[submit], vk::Fence::null())
-            }?;
+            }
+            .map_err(|e| self.device.error(e))?;
         }
 
         let point = Point {

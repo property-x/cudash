@@ -92,7 +92,7 @@ impl GpuContext {
     /// Blocks until all work on this GPU has finished.
     pub fn synchronize(&self) -> Result<(), DriverError> {
         let queue = self.device.queue.lock().unwrap();
-        unsafe { self.device.device.queue_wait_idle(*queue) }?;
+        unsafe { self.device.device.queue_wait_idle(*queue) }.map_err(|e| self.device.error(e))?;
         Ok(())
     }
 

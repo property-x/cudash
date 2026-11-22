@@ -545,6 +545,77 @@ impl Device {
             .into_owned()
     }
 
+    /// `result` as a [`DriverError`], with what the driver says about the fault when the device
+    /// was lost.
+    pub(crate) fn error(&self, result: vk::Result) -> DriverError {
+        if result != vk::Result::ERROR_DEVICE_LOST {
+            return result.into();
+        }
+        DriverError::DeviceLost(
+            self.extensions
+                .contains(&ext::device_fault::NAME)
+                .then(|| self.fault())
+                .flatten(),
+        )
+    }
+
+    /// `vkGetDeviceFaultInfoEXT`, without the vendor binary. `None` if the driver reported nothing.
+    fn fault(&self) -> Option<super::DeviceFault> {
+        let functions = load_ext!(ext::device_fault::Device, &self.instance, &self.device);
+        let get = functions.fp().get_device_fault_info_ext;
+        let device = self.device.handle();
+        let mut counts = vk::DeviceFaultCountsEXT::default();
+        unsafe { get(device, &mut counts, std::ptr::null_mut()) }
+            .result()
+            .ok()?;
+        counts.vendor_binary_size = 0;
+        let mut addresses =
+            vec![vk::DeviceFaultAddressInfoEXT::default(); counts.address_info_count as usize];
+        let mut vendor =
+            vec![vk::DeviceFaultVendorInfoEXT::default(); counts.vendor_info_count as usize];
+        let mut info = vk::DeviceFaultInfoEXT {
+            p_address_infos: addresses.as_mut_ptr(),
+            p_vendor_infos: vendor.as_mut_ptr(),
+            ..Default::default()
+        };
+        // INCOMPLETE still fills what fits.
+        let result = unsafe { get(device, &mut counts, &mut info) };
+        if result != vk::Result::SUCCESS && result != vk::Result::INCOMPLETE {
+            return None;
+        }
+        addresses.truncate(counts.address_info_count as usize);
+        vendor.truncate(counts.vendor_info_count as usize);
+        let text = |chars: &[std::ffi::c_char]| {
+            let bytes: Vec<u8> = chars
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        Some(super::DeviceFault {
+            description: text(&info.description),
+            addresses: addresses
+                .iter()
+                .map(|a| super::FaultAddress {
+                    kind: a.address_type,
+                    address: a.reported_address,
+                    precision: a.address_precision,
+                })
+                .collect(),
+            vendor: vendor
+                .iter()
+                .map(|v| {
+                    (
+                        text(&v.description),
+                        v.vendor_fault_code,
+                        v.vendor_fault_data,
+                    )
+                })
+                .collect(),
+        })
+    }
+
     pub(crate) fn total_mem(&self) -> usize {
         self.largest_device_local_heap()
             .map_or(0, |(_, size)| size as usize)
@@ -955,6 +1026,27 @@ impl Drop for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a lost device becomes `DeviceLost`, and its message carries the fault.
+    #[test]
+    fn device_loss_is_its_own_error_with_the_fault_in_the_message() {
+        let device = Device::new(0).unwrap();
+        let other = vk::Result::ERROR_OUT_OF_HOST_MEMORY;
+        assert_eq!(device.error(other), DriverError::Vulkan(other));
+        let fault = crate::driver::DeviceFault {
+            description: "page fault".into(),
+            addresses: vec![crate::driver::FaultAddress {
+                kind: vk::DeviceFaultAddressTypeEXT::WRITE_INVALID,
+                address: 0xdead_0000,
+                precision: 0x1000,
+            }],
+            vendor: vec![("xid".into(), 31, 0)],
+        };
+        let message = DriverError::DeviceLost(Some(fault)).to_string();
+        for part in ["page fault", "WRITE_INVALID", "0xdead0000", "xid", "0x1f"] {
+            assert!(message.contains(part), "{message}");
+        }
+    }
 
     #[test]
     fn extensions_missing_a_requirement_are_dropped() {

@@ -31,6 +31,29 @@ pub enum DriverError {
     StreamCapture(String),
     /// From the CUDA part of a graph, under the `cuda` feature.
     Cuda(String),
+    /// The GPU stopped this context, as after CUDA's "illegal memory access". Every later call
+    /// on the context fails. Holds what the driver reported, where it has `VK_EXT_device_fault`
+    /// and reported anything.
+    DeviceLost(Option<DeviceFault>),
+}
+
+/// What the driver reported about a lost device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceFault {
+    pub description: String,
+    /// The accesses that faulted, or were running when the device was lost.
+    pub addresses: Vec<FaultAddress>,
+    /// Driver-specific entries, as `(description, code, data)`.
+    pub vendor: Vec<(String, u64, u64)>,
+}
+
+/// One address in a [`DeviceFault`]. The access was somewhere in `address..address + precision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FaultAddress {
+    /// Read, write, execute, or an instruction pointer.
+    pub kind: vk::DeviceFaultAddressTypeEXT,
+    pub address: u64,
+    pub precision: u64,
 }
 
 impl fmt::Display for DriverError {
@@ -49,6 +72,21 @@ impl fmt::Display for DriverError {
             Self::InvalidImage(e) => write!(f, "invalid image: {e}"),
             Self::StreamCapture(e) => write!(f, "stream capture: {e}"),
             Self::Cuda(e) => write!(f, "CUDA error: {e}"),
+            Self::DeviceLost(None) => f.write_str("device lost"),
+            Self::DeviceLost(Some(fault)) => {
+                write!(f, "device lost: {}", fault.description)?;
+                for a in &fault.addresses {
+                    write!(
+                        f,
+                        "; {:?} at {:#x} (±{:#x})",
+                        a.kind, a.address, a.precision
+                    )?;
+                }
+                for (description, code, data) in &fault.vendor {
+                    write!(f, "; {description} (code {code:#x}, data {data:#x})")?;
+                }
+                Ok(())
+            }
         }
     }
 }

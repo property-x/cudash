@@ -110,15 +110,19 @@ impl SharedSemaphore {
         match unsafe { self.vulkan.device.device.wait_semaphores(&info, timeout_ns) } {
             Ok(()) => Ok(true),
             Err(vk::Result::TIMEOUT) => Ok(false),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(self.vulkan.device.error(e).into()),
         }
     }
 
     /// The value the semaphore has reached so far.
     pub fn completed_value(&self) -> Result<u64> {
-        Ok(unsafe {
-            (self.vulkan.device.device).get_semaphore_counter_value(self.vulkan.semaphore)
-        }?)
+        let device = &self.vulkan.device;
+        unsafe {
+            device
+                .device
+                .get_semaphore_counter_value(self.vulkan.semaphore)
+        }
+        .map_err(|e| device.error(e).into())
     }
 }
 

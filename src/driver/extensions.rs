@@ -111,6 +111,13 @@ optional_extensions! {
         off: [],
     },
 
+    // Fault addresses and a description after the GPU is lost, for `DriverError::DeviceLost`, as
+    // CUDA's "illegal memory access". (cost: none until a fault; the vendor crash dump stays off)
+    c"VK_EXT_device_fault" => PhysicalDeviceFaultFeaturesEXT {
+        capabilities: [],
+        off: [device_fault_vendor_binary],
+    },
+
     // Register, spill and code-size statistics per kernel, for `GpuFunction::statistics`. Only
     // pipelines created with `CAPTURE_STATISTICS` collect them, and launches don't. (cost: none)
     c"VK_KHR_pipeline_executable_properties" => PhysicalDevicePipelineExecutablePropertiesFeaturesKHR {
