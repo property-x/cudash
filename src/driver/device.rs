@@ -379,10 +379,13 @@ impl Device {
         unsafe {
             let mut v11 = vk::PhysicalDeviceVulkan11Properties::default();
             let mut v13 = vk::PhysicalDeviceVulkan13Properties::default();
+            // The same UUID as `v11.device_uuid`, but the profiles layer zeroes that copy.
+            let mut id = vk::PhysicalDeviceIDProperties::default();
             let mut import = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
             let mut properties = vk::PhysicalDeviceProperties2::default()
                 .push_next(&mut v11)
-                .push_next(&mut v13);
+                .push_next(&mut v13)
+                .push_next(&mut id);
             let has_host_import = extensions.contains(&ext::external_memory_host::NAME);
             if has_host_import {
                 properties = properties.push_next(&mut import);
@@ -399,7 +402,7 @@ impl Device {
             Ok(DeviceState {
                 queue: Mutex::new(device.get_device_queue(queue_family, 0)),
                 memory: instance.get_physical_device_memory_properties(physical_device),
-                uuid: v11.device_uuid,
+                uuid: id.device_uuid,
                 max_buffer: v13.max_buffer_size,
                 max_allocation: v11.max_memory_allocation_size,
                 properties,
@@ -924,8 +927,7 @@ mod tests {
     use super::*;
 
     /// Free memory goes down by about the size of a large allocation. Other processes change it
-    /// too, so the check allows a quarter of the allocation as slack. 64 MiB, since lavapipe
-    /// refuses device-local allocations of 128 MiB and more here.
+    /// too, so the check allows a quarter of the allocation as slack.
     #[test]
     fn mem_get_info_sees_an_allocation() {
         let device = Device::new(0).unwrap();
@@ -936,7 +938,11 @@ mod tests {
             assert_eq!(free, total);
             return;
         }
-        let bytes = (64 << 20).min(free / 2);
+        // lavapipe's budget comes from host RAM, which an unwritten allocation may not use yet.
+        if device.properties.device_type == vk::PhysicalDeviceType::CPU {
+            return;
+        }
+        let bytes = (256 << 20).min(free / 2);
         let _buffer = Buffer::device_local(&device, bytes as u64).unwrap();
         let (after, _) = device.mem_get_info();
         assert!(
