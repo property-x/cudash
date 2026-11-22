@@ -1,5 +1,10 @@
 # cudash developer commands. Currently assumes `ubuntu`.
 
+# GitHub Actions sets CI=true. There, build output is quiet: setup hides each step unless it fails, and cargo prints
+# only warnings and errors. Set `CI=true` locally to check that.
+ci := env_var_or_default('CI', env_var_or_default('GITHUB_ACTIONS', ''))
+quiet := if ci == 'true' { '-q' } else { '' }
+
 # List all commands
 default:
     @just --list --unsorted
@@ -14,15 +19,26 @@ setup:
         echo "Install Rust first: https://rustup.rs" >&2
         exit 1
     fi
+    # In CI, a step's output is kept and printed only if the step fails
+    log=$(mktemp)
+    trap 'rm -f "$log"' EXIT
+    step() {
+        if [ "{{ci}}" != true ]; then
+            "$@"
+        elif ! "$@" >"$log" 2>&1; then
+            cat "$log" >&2
+            return 1
+        fi
+    }
     # libnvrtc12 is in Ubuntu's multiverse repository, and doesn't need an NVIDIA GPU.
-    $sudo apt-get update
-    $sudo apt-get install -y build-essential slang-compiler libnvrtc12 mesa-vulkan-drivers \
+    step $sudo apt-get update
+    step $sudo apt-get install -y build-essential slang-compiler libnvrtc12 mesa-vulkan-drivers \
         vulkan-tools vulkan-validationlayers spirv-tools
     # After apt: cargo install links with cc, which a fresh ubuntu:26.04 doesn't have until build-essential is installed
-    rustup component add rustfmt clippy
-    rustup toolchain install nightly --component rustfmt,clippy
+    step rustup component add rustfmt clippy
+    step rustup toolchain install nightly --component rustfmt,clippy
     # Ubuntu's mdbook is 0.4.x, and 0.5 is current. cargo skips the build when this version is already installed.
-    cargo install --locked mdbook --version 0.5.4
+    step cargo install --locked mdbook --version 0.5.4
     # Slang looks for the unversioned library name, which the package doesn't provide.
     $sudo ln -sf libnvrtc.so.12 /usr/lib/x86_64-linux-gnu/libnvrtc.so
     $sudo ldconfig
@@ -123,8 +139,8 @@ build:
 
 # Build everything, and check the library still builds without cudarc
 check:
-    cargo check --all-targets
-    cargo check --no-default-features
+    cargo {{quiet}} check --all-targets
+    cargo {{quiet}} check --no-default-features
 
 # Run the tests, optionally only those matching a filter. Needs a Vulkan 1.3 GPU
 test *filter:
@@ -136,9 +152,14 @@ validate:
     set -euo pipefail
     log=$(mktemp)
     trap 'rm -f "$log"' EXIT
-    # The layer may print to stderr, so keep both streams. pipefail makes a failing test fail the recipe.
-    VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
-        cargo test --no-fail-fast -- --test-threads=1 --nocapture 2>&1 | tee "$log"
+    # Build first, so the quiet flag hides the compile lines and the log holds only the test run
+    cargo {{quiet}} test --no-fail-fast --no-run
+    # The output goes through tee, so it isn't a terminal: force colour. CLICOLOR_FORCE does it for cucumber,
+    # which reads that variable rather than --color. The flag must be one argument: the features runner
+    # would take a separate "always" as a test filter. The layer may print to stderr, so keep both streams.
+    # pipefail makes a failing test fail the recipe.
+    CARGO_TERM_COLOR=always CLICOLOR_FORCE=1 VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
+        cargo test --no-fail-fast -- --test-threads=1 --nocapture --color=always 2>&1 | tee "$log"
     errors=$(grep -c 'Validation Error' "$log" || true)
     if [ "$errors" != 0 ]; then
         grep -A8 'Validation Error' "$log"
@@ -194,7 +215,7 @@ fmt:
 # Lint everything, including interop, treating warnings as errors
 lint:
     cargo +nightly fmt --check
-    cargo +nightly clippy --all-targets -- -D warnings
+    cargo +nightly clippy {{quiet}} --all-targets -- -D warnings
 
 # Build the Rust API reference (cargo doc) and open it in a browser
 doc:
