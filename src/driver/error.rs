@@ -10,6 +10,8 @@ pub enum DriverError {
     NoVulkan(String),
     /// There's no suitable GPU with this ordinal.
     NoSuchDevice(usize),
+    /// No suitable GPU has this PCI bus ID, or it isn't one.
+    NoSuchBusId(String),
     /// The GPU lacks a Vulkan feature cudash relies on.
     MissingFeature(&'static str),
     /// No frame boundary is active on this stream.
@@ -62,6 +64,7 @@ impl fmt::Display for DriverError {
             Self::Vulkan(e) => write!(f, "Vulkan error: {e}"),
             Self::NoVulkan(e) => write!(f, "couldn't load Vulkan: {e}"),
             Self::NoSuchDevice(n) => write!(f, "no suitable GPU with ordinal {n}"),
+            Self::NoSuchBusId(id) => write!(f, "no suitable GPU at PCI bus ID {id:?}"),
             Self::MissingFeature(name) => write!(f, "GPU lacks the Vulkan feature {name}"),
             Self::NoActiveFrame => f.write_str("no frame boundary is active"),
             Self::InvalidModule(e) => write!(f, "invalid module: {e}"),

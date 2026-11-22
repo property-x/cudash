@@ -48,6 +48,13 @@ impl GpuContext {
         }))
     }
 
+    /// Creates a context on the GPU at this PCI bus ID, `[domain:]bus:device.function` in hex,
+    /// as `cuDeviceGetByPCIBusId` takes it: `0000:01:00.0`, or nvidia-smi's `00000000:01:00.0`.
+    /// Only GPUs with `VK_EXT_pci_bus_info` can be found this way.
+    pub fn from_bus_id(bus_id: &str) -> Result<Arc<Self>, DriverError> {
+        Self::new(Device::ordinal_at(bus_id)?)
+    }
+
     /// How many suitable GPUs there are.
     pub fn device_count() -> Result<i32, DriverError> {
         Device::count()
@@ -63,6 +70,13 @@ impl GpuContext {
 
     pub fn uuid(&self) -> Result<[u8; 16], DriverError> {
         Ok(self.device.uuid)
+    }
+
+    /// `domain:bus:device.function`, as `cuDeviceGetPCIBusId` formats it, where the GPU supports
+    /// `VK_EXT_pci_bus_info`.
+    pub fn pci_bus_id(&self) -> Option<String> {
+        let [domain, bus, device, function] = self.device.pci_bus_id?;
+        Some(format!("{domain:04x}:{bus:02x}:{device:02x}.{function:x}"))
     }
 
     /// Size of the largest device-local memory heap, in bytes.

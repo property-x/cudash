@@ -41,6 +41,7 @@ pub(crate) struct DeviceState {
     pub(crate) queue_family: u32,
     pub(crate) properties: vk::PhysicalDeviceProperties,
     pub(crate) uuid: [u8; 16],
+    pub(crate) pci_bus_id: Option<[u32; 4]>,
     memory: vk::PhysicalDeviceMemoryProperties,
     /// `maxBufferSize` and `maxMemoryAllocationSize`, checked before Vulkan sees a bigger request.
     max_buffer: u64,
@@ -128,17 +129,51 @@ fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError
             let properties = instance.get_physical_device_properties(pd);
             properties.api_version >= API_VERSION && compute_queue_family(instance, pd).is_some()
         });
-        devices.sort_by_key(
-            |&pd| match instance.get_physical_device_properties(pd).device_type {
+        // Within a type, by PCI bus ID (as `CUDA_DEVICE_ORDER=PCI_BUS_ID`), then devices without one.
+        devices.sort_by_cached_key(|&pd| {
+            let rank = match instance.get_physical_device_properties(pd).device_type {
                 vk::PhysicalDeviceType::DISCRETE_GPU => 0,
                 vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
                 vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
                 vk::PhysicalDeviceType::CPU => 4,
                 _ => 3,
-            },
-        );
+            };
+            let bus = pci_bus_id(instance, pd);
+            (rank, bus.is_none(), bus)
+        });
         Ok((vulkan, devices))
     }
+}
+
+/// Domain, bus, device and function, where the GPU supports `VK_EXT_pci_bus_info`. Reading the
+/// property only needs support, not an enabled extension.
+fn pci_bus_id(instance: &crate::ash::Instance, pd: vk::PhysicalDevice) -> Option<[u32; 4]> {
+    let have = unsafe { instance.enumerate_device_extension_properties(pd) }.ok()?;
+    if !have
+        .iter()
+        .any(|e| e.extension_name_as_c_str() == Ok(ext::pci_bus_info::NAME))
+    {
+        return None;
+    }
+    let mut bus = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
+    let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut bus);
+    unsafe { instance.get_physical_device_properties2(pd, &mut properties) };
+    Some([
+        bus.pci_domain,
+        bus.pci_bus,
+        bus.pci_device,
+        bus.pci_function,
+    ])
+}
+
+/// `[domain:]bus:device.function` in hex, as `cuDeviceGetByPCIBusId` takes it.
+fn parse_bus_id(text: &str) -> Option<[u32; 4]> {
+    let (rest, function) = text.trim().rsplit_once('.')?;
+    let mut parts = rest.rsplitn(3, ':');
+    let (device, bus) = (parts.next()?, parts.next()?);
+    let domain = parts.next().unwrap_or("0");
+    let hex = |part: &str| u32::from_str_radix(part, 16).ok();
+    Some([hex(domain)?, hex(bus)?, hex(device)?, hex(function)?])
 }
 
 /// Extensions cudash uses when the GPU has them: host import for registered memory, and
@@ -378,6 +413,17 @@ impl Device {
         Ok(enumerate()?.1.len() as i32)
     }
 
+    /// The ordinal of the GPU at this PCI bus ID.
+    pub(crate) fn ordinal_at(bus_id: &str) -> Result<usize, DriverError> {
+        let missing = || DriverError::NoSuchBusId(bus_id.to_owned());
+        let wanted = parse_bus_id(bus_id).ok_or_else(missing)?;
+        let (vulkan, devices) = enumerate()?;
+        devices
+            .iter()
+            .position(|&pd| pci_bus_id(&vulkan.instance, pd) == Some(wanted))
+            .ok_or_else(missing)
+    }
+
     pub(crate) fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
         let parked = {
             let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
@@ -433,6 +479,7 @@ impl Device {
                 queue: Mutex::new(device.get_device_queue(queue_family, 0)),
                 memory: instance.get_physical_device_memory_properties(physical_device),
                 uuid: id.device_uuid,
+                pci_bus_id: pci_bus_id(instance, physical_device),
                 max_buffer: v13.max_buffer_size,
                 max_allocation: v11.max_memory_allocation_size,
                 properties,
@@ -1026,6 +1073,35 @@ impl Drop for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bus_ids_parse_as_cuda_and_nvidia_smi_write_them() {
+        assert_eq!(parse_bus_id("0000:01:00.0"), Some([0, 1, 0, 0]));
+        assert_eq!(parse_bus_id("00000000:0A:1f.3"), Some([0, 10, 31, 3]));
+        assert_eq!(parse_bus_id("01:00.0"), Some([0, 1, 0, 0]));
+        for bad in ["", "01:00", "0:0:01:00.0", "zz:00.0", "01:00."] {
+            assert_eq!(parse_bus_id(bad), None, "{bad}");
+        }
+    }
+
+    /// GPU 0's own bus ID finds GPU 0 again, and an unknown one is an error.
+    #[test]
+    fn from_bus_id_finds_the_gpu_pci_bus_id_names() {
+        let ctx = crate::driver::GpuContext::new(0).unwrap();
+        if let Some(id) = ctx.pci_bus_id() {
+            assert_eq!(
+                crate::driver::GpuContext::from_bus_id(&id)
+                    .unwrap()
+                    .ordinal(),
+                0
+            );
+        }
+        let missing = crate::driver::GpuContext::from_bus_id("ffff:ff:1f.7");
+        assert_eq!(
+            missing.err(),
+            Some(DriverError::NoSuchBusId("ffff:ff:1f.7".into()))
+        );
+    }
 
     /// Only a lost device becomes `DeviceLost`, and its message carries the fault.
     #[test]

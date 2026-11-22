@@ -1,4 +1,4 @@
-//! Prints what cudash sees on each GPU: the device, driver, memory, the extensions cudash
+//! Prints what cudash sees on each GPU: the device, driver, PCI bus ID, memory, the extensions cudash
 //! enabled, the optional ones this GPU lacks, and the cooperative matrix shapes. Paste the
 //! output into an extension request.
 //!
@@ -37,6 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             vk::api_version_minor(api),
             vk::api_version_patch(api),
             v11.subgroup_size,
+        );
+        println!(
+            "- PCI bus ID: {}",
+            ctx.pci_bus_id().as_deref().unwrap_or("unknown")
         );
         println!("- memory: {} MiB free of {} MiB", free >> 20, total >> 20);
 
