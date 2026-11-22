@@ -251,7 +251,10 @@ macro_rules! optional_extensions {
         capabilities: [$($capability:ident($id:literal): [$($bit:ident),* $(,)?]),* $(,)?],
         off: [$($off:ident),* $(,)?] $(,)?
     }),* $(,)?) => {
-        const OPTIONAL_EXTENSIONS: &[&CStr] = &[$($(#[$meta])* $name),*];
+        /// The shader extensions cudash enables when the GPU has them, listed in
+        /// `src/driver/extensions.rs`. [`GpuContext::extensions`](crate::driver::GpuContext::extensions)
+        /// says which ones a context got.
+        pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[$($(#[$meta])* $name),*];
 
         /// `(extension, extension it needs)` for each entry's `requires`.
         const OPTIONAL_REQUIRES: &[&[(&CStr, &CStr)]] =

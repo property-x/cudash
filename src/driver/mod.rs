@@ -32,6 +32,7 @@ pub(crate) mod stream;
 pub mod sys;
 
 pub use context::GpuContext;
+pub use device::OPTIONAL_EXTENSIONS;
 pub use error::DriverError;
 pub use graph::GpuGraph;
 pub use host::PinnedHostSlice;

@@ -26,6 +26,9 @@ Hint: This is a prototype to help me learn and understand Vulkan compute from a 
 
 **Contributions welcome!**
 
+Need an extension cudash doesn't enable? Open an "Extension request" issue and paste the output of
+`cargo run --example caps`.
+
 The guide in `docs/` covers every feature in detail. Build it with `just docs`.
 
 ## What's covered

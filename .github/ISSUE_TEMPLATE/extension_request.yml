@@ -1,0 +1,26 @@
+name: Extension request
+description: Ask cudash to enable a Vulkan extension or feature.
+title: "Extension request: VK_"
+body:
+  - type: input
+    id: extension
+    attributes:
+      label: Extension
+      description: The Vulkan extension or feature, for example `VK_KHR_shader_bfloat16`.
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: What you need it for
+      description: A sample kernel or API call that needs it, and what it replaces in CUDA if anything.
+    validations:
+      required: true
+  - type: textarea
+    id: caps
+    attributes:
+      label: Output of `cargo run --example caps`
+      description: GPU, driver, and what cudash enables on it.
+      render: markdown
+    validations:
+      required: true

@@ -96,6 +96,12 @@ impl GpuContext {
         Ok(())
     }
 
+    /// The device extensions cudash enabled: its own, and those of [`OPTIONAL_EXTENSIONS`](super::OPTIONAL_EXTENSIONS)
+    /// the GPU has.
+    pub fn extensions(&self) -> &[&'static std::ffi::CStr] {
+        &self.device.extensions
+    }
+
     /// The Vulkan instance, for use alongside cudash, such as rendering results.
     pub fn vk_instance(&self) -> &crate::ash::Instance {
         &self.device.instance
