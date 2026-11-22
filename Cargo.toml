@@ -24,6 +24,8 @@ kernel_debug = []
 
 [dev-dependencies]
 cucumber = "0.23"
+# Checks the SPIR-V capability numbers in src/driver/extensions.rs.
+spirv = "0.4.0"
 # Tests compile kernels with NVRTC (cudarc::nvrtc). Dev-only, so library users don't get it.
 cudarc = { version = "0.19", default-features = false, features = ["std", "driver", "nvrtc", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
 # Examples bracket a frame for RenderDoc. Dev-only, so library users don't get it.

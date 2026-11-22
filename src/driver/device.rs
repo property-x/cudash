@@ -144,16 +144,8 @@ fn available_extensions(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Vec
         ext::external_memory_host::NAME,
         khr::portability_subset::NAME,
         ext::frame_boundary::NAME,
-        // Shader features, enabled for whichever kernel wants them.
-        ext::shader_atomic_float::NAME,
-        ext::shader_atomic_float2::NAME,
-        khr::cooperative_matrix::NAME,
-        khr::shader_clock::NAME,
-        khr::shader_maximal_reconvergence::NAME,
-        khr::shader_subgroup_rotate::NAME,
-        khr::shader_float_controls2::NAME,
-        khr::shader_expect_assume::NAME,
     ];
+    wanted.extend(OPTIONAL_EXTENSIONS);
     #[cfg(feature = "cudarc")]
     wanted.extend(crate::interop::EXPORT_EXTENSIONS);
     // For `CudaSlice::export_dma_buf`, which also needs `VK_KHR_external_memory_fd` from above.
@@ -185,59 +177,102 @@ fn missing_required_feature(
     .find_map(|(name, enabled)| (enabled != vk::TRUE).then_some(name))
 }
 
-// SPIR-V `Capability` values, from Khronos's `spirv.core.grammar.json` or `spirv`.
-const CAPABILITY_FLOAT16: u32 = 9;
-const CAPABILITY_FLOAT64: u32 = 10;
-const CAPABILITY_INT64: u32 = 11;
-const CAPABILITY_INT64_ATOMICS: u32 = 12;
-const CAPABILITY_INT16: u32 = 22;
-const CAPABILITY_INT8: u32 = 39;
-const CAPABILITY_STORAGE_BUFFER_16BIT_ACCESS: u32 = 4433;
-const CAPABILITY_STORAGE_BUFFER_8BIT_ACCESS: u32 = 4448;
-const CAPABILITY_SHADER_CLOCK_KHR: u32 = 5055;
-const CAPABILITY_ATOMIC_FLOAT32_MIN_MAX_EXT: u32 = 5612;
-const CAPABILITY_ATOMIC_FLOAT64_MIN_MAX_EXT: u32 = 5613;
-const CAPABILITY_ATOMIC_FLOAT16_MIN_MAX_EXT: u32 = 5616;
-const CAPABILITY_EXPECT_ASSUME_KHR: u32 = 5629;
-const CAPABILITY_COOPERATIVE_MATRIX_KHR: u32 = 6022;
-const CAPABILITY_GROUP_NON_UNIFORM_ROTATE_KHR: u32 = 6026;
-const CAPABILITY_FLOAT_CONTROLS2: u32 = 6029;
-const CAPABILITY_ATOMIC_FLOAT32_ADD_EXT: u32 = 6033;
-const CAPABILITY_ATOMIC_FLOAT64_ADD_EXT: u32 = 6034;
-const CAPABILITY_ATOMIC_FLOAT16_ADD_EXT: u32 = 6095;
+/// SPIR-V `Capability` values for the core features, named and numbered as in Khronos's
+/// `spirv.core.grammar.json`. `extensions.rs` gives those of the extensions with each entry.
+#[allow(non_upper_case_globals)]
+mod spirv_capability {
+    pub const Float16: u32 = 9;
+    pub const Float64: u32 = 10;
+    pub const Int64: u32 = 11;
+    pub const Int64Atomics: u32 = 12;
+    pub const Int16: u32 = 22;
+    pub const Int8: u32 = 39;
+    pub const StorageBuffer16BitAccess: u32 = 4433;
+    pub const StorageBuffer8BitAccess: u32 = 4448;
+}
 
-/// SPIR-V capabilities whose feature is off, as `(capability, feature)`. `extra` holds the
-/// extension features; a capability counts as supported when any of its features is on.
+/// Defines what `extensions.rs` lists:
+/// `OPTIONAL_EXTENSIONS`, and `OptionalFeatures` with one feature struct per extension.
+macro_rules! optional_extensions {
+    ($($name:literal => $features:ident {
+        capabilities: [$($capability:ident($id:literal): [$($bit:ident),* $(,)?]),* $(,)?],
+        off: [$($off:ident),* $(,)?] $(,)?
+    }),* $(,)?) => {
+        const OPTIONAL_EXTENSIONS: &[&CStr] = &[$($name),*];
+
+        #[allow(non_snake_case)]
+        #[derive(Default)]
+        struct OptionalFeatures {
+            $($features: vk::$features<'static>,)*
+        }
+
+        impl OptionalFeatures {
+            /// Chains the struct of each extension in `extensions` onto `features`. Clears the
+            /// `p_next` an earlier chain left, so the queried structs can be chained again.
+            fn chain<'a>(
+                &'a mut self,
+                mut features: vk::PhysicalDeviceFeatures2<'a>,
+                extensions: &[&CStr],
+            ) -> vk::PhysicalDeviceFeatures2<'a> {
+                $(if extensions.contains(&$name) {
+                    self.$features.p_next = std::ptr::null_mut();
+                    features = features.push_next(&mut self.$features);
+                })*
+                features
+            }
+
+            /// Clears the bits listed under `off`.
+            fn turn_off(&mut self) {
+                $($(self.$features.$off = vk::FALSE;)*)*
+            }
+
+            /// `(capability, name, whether any of its bits is on)` for every listed capability.
+            fn capabilities(&self) -> Vec<(u32, &'static str, vk::Bool32)> {
+                vec![$($((
+                    $id,
+                    stringify!($capability),
+                    0 $(| self.$features.$bit)*,
+                ),)*)*]
+            }
+        }
+    };
+}
+
+include!("extensions.rs");
+
+/// SPIR-V capabilities whose feature is off, as `(capability, name)`. `optional` holds the
+/// extensions' capabilities from [`OptionalFeatures::capabilities`].
 fn unsupported_capabilities(
     core: &vk::PhysicalDeviceFeatures,
     v11: &vk::PhysicalDeviceVulkan11Features,
     v12: &vk::PhysicalDeviceVulkan12Features,
-    extra: [(u32, &'static str, vk::Bool32); 11],
+    optional: Vec<(u32, &'static str, vk::Bool32)>,
 ) -> Vec<(u32, &'static str)> {
+    use spirv_capability::*;
     [
-        (CAPABILITY_FLOAT16, "shaderFloat16", v12.shader_float16),
-        (CAPABILITY_FLOAT64, "shaderFloat64", core.shader_float64),
-        (CAPABILITY_INT64, "shaderInt64", core.shader_int64),
+        (Float16, "Float16", v12.shader_float16),
+        (Float64, "Float64", core.shader_float64),
+        (Int64, "Int64", core.shader_int64),
         (
-            CAPABILITY_INT64_ATOMICS,
-            "shaderBufferInt64Atomics",
+            Int64Atomics,
+            "Int64Atomics",
             v12.shader_buffer_int64_atomics | v12.shader_shared_int64_atomics,
         ),
-        (CAPABILITY_INT16, "shaderInt16", core.shader_int16),
-        (CAPABILITY_INT8, "shaderInt8", v12.shader_int8),
+        (Int16, "Int16", core.shader_int16),
+        (Int8, "Int8", v12.shader_int8),
         (
-            CAPABILITY_STORAGE_BUFFER_16BIT_ACCESS,
-            "storageBuffer16BitAccess",
+            StorageBuffer16BitAccess,
+            "StorageBuffer16BitAccess",
             v11.storage_buffer16_bit_access,
         ),
         (
-            CAPABILITY_STORAGE_BUFFER_8BIT_ACCESS,
-            "storageBuffer8BitAccess",
+            StorageBuffer8BitAccess,
+            "StorageBuffer8BitAccess",
             v12.storage_buffer8_bit_access,
         ),
     ]
     .into_iter()
-    .chain(extra)
+    .chain(optional)
     .filter(|&(_, _, on)| on != vk::TRUE)
     .map(|(capability, name, _)| (capability, name))
     .collect()
@@ -371,42 +406,27 @@ impl Device {
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
             let mut frame_boundary = vk::PhysicalDeviceFrameBoundaryFeaturesEXT::default();
-            let mut atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
-            let mut atomic_float2 = vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT::default();
-            let mut cooperative_matrix = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
-            let mut clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default();
-            let mut reconvergence =
-                vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR::default();
-            let mut rotate = vk::PhysicalDeviceShaderSubgroupRotateFeaturesKHR::default();
-            let mut float_controls2 = vk::PhysicalDeviceShaderFloatControls2FeaturesKHR::default();
-            let mut expect_assume = vk::PhysicalDeviceShaderExpectAssumeFeaturesKHR::default();
+            let mut optional = OptionalFeatures::default();
             // Builds the same chain twice, to query and then to enable, so it clears each
-            // `p_next` the query left behind. A struct is only chained when its extension is on.
+            // `p_next` the query left behind.
             macro_rules! chain {
-                (@ $features:ident; $($name:expr => $s:ident,)*) => {{
-                    $(if extensions.contains(&$name) {
-                        $s.p_next = std::ptr::null_mut();
-                        $features = $features.push_next(&mut $s);
-                    })*
-                    $features
-                }};
                 ($features:expr) => {{
-                    let mut features = $features;
-                    for s in [&mut v11.p_next, &mut v12.p_next, &mut v13.p_next] {
-                        *s = std::ptr::null_mut();
+                    for p_next in [
+                        &mut v11.p_next,
+                        &mut v12.p_next,
+                        &mut v13.p_next,
+                        &mut frame_boundary.p_next,
+                    ] {
+                        *p_next = std::ptr::null_mut();
                     }
-                    features = features.push_next(&mut v11).push_next(&mut v12).push_next(&mut v13);
-                    chain!(@ features;
-                        ext::frame_boundary::NAME => frame_boundary,
-                        ext::shader_atomic_float::NAME => atomic_float,
-                        ext::shader_atomic_float2::NAME => atomic_float2,
-                        khr::cooperative_matrix::NAME => cooperative_matrix,
-                        khr::shader_clock::NAME => clock,
-                        khr::shader_maximal_reconvergence::NAME => reconvergence,
-                        khr::shader_subgroup_rotate::NAME => rotate,
-                        khr::shader_float_controls2::NAME => float_controls2,
-                        khr::shader_expect_assume::NAME => expect_assume,
-                    )
+                    let mut features = $features
+                        .push_next(&mut v11)
+                        .push_next(&mut v12)
+                        .push_next(&mut v13);
+                    if extensions.contains(&ext::frame_boundary::NAME) {
+                        features = features.push_next(&mut frame_boundary);
+                    }
+                    optional.chain(features, extensions)
                 }};
             }
             let mut features = {
@@ -417,79 +437,11 @@ impl Device {
             if let Some(name) = missing_required_feature(&v12, &v13) {
                 return Err(DriverError::MissingFeature(name));
             }
-            let unsupported = unsupported_capabilities(
-                &features,
-                &v11,
-                &v12,
-                [
-                    (
-                        CAPABILITY_ATOMIC_FLOAT32_ADD_EXT,
-                        "shaderBufferFloat32AtomicAdd",
-                        atomic_float.shader_buffer_float32_atomic_add
-                            | atomic_float.shader_shared_float32_atomic_add
-                            | atomic_float.shader_image_float32_atomic_add,
-                    ),
-                    (
-                        CAPABILITY_ATOMIC_FLOAT64_ADD_EXT,
-                        "shaderBufferFloat64AtomicAdd",
-                        atomic_float.shader_buffer_float64_atomic_add
-                            | atomic_float.shader_shared_float64_atomic_add,
-                    ),
-                    (
-                        CAPABILITY_ATOMIC_FLOAT16_ADD_EXT,
-                        "shaderBufferFloat16AtomicAdd",
-                        atomic_float2.shader_buffer_float16_atomic_add
-                            | atomic_float2.shader_shared_float16_atomic_add,
-                    ),
-                    (
-                        CAPABILITY_ATOMIC_FLOAT32_MIN_MAX_EXT,
-                        "shaderBufferFloat32AtomicMinMax",
-                        atomic_float2.shader_buffer_float32_atomic_min_max
-                            | atomic_float2.shader_shared_float32_atomic_min_max
-                            | atomic_float2.shader_image_float32_atomic_min_max,
-                    ),
-                    (
-                        CAPABILITY_ATOMIC_FLOAT64_MIN_MAX_EXT,
-                        "shaderBufferFloat64AtomicMinMax",
-                        atomic_float2.shader_buffer_float64_atomic_min_max
-                            | atomic_float2.shader_shared_float64_atomic_min_max,
-                    ),
-                    (
-                        CAPABILITY_ATOMIC_FLOAT16_MIN_MAX_EXT,
-                        "shaderBufferFloat16AtomicMinMax",
-                        atomic_float2.shader_buffer_float16_atomic_min_max
-                            | atomic_float2.shader_shared_float16_atomic_min_max,
-                    ),
-                    (
-                        CAPABILITY_COOPERATIVE_MATRIX_KHR,
-                        "cooperativeMatrix",
-                        cooperative_matrix.cooperative_matrix,
-                    ),
-                    (
-                        CAPABILITY_SHADER_CLOCK_KHR,
-                        "shaderSubgroupClock",
-                        clock.shader_subgroup_clock | clock.shader_device_clock,
-                    ),
-                    (
-                        CAPABILITY_GROUP_NON_UNIFORM_ROTATE_KHR,
-                        "shaderSubgroupRotate",
-                        rotate.shader_subgroup_rotate,
-                    ),
-                    (
-                        CAPABILITY_FLOAT_CONTROLS2,
-                        "shaderFloatControls2",
-                        float_controls2.shader_float_controls2,
-                    ),
-                    (
-                        CAPABILITY_EXPECT_ASSUME_KHR,
-                        "shaderExpectAssume",
-                        expect_assume.shader_expect_assume,
-                    ),
-                ],
-            );
+            let unsupported =
+                unsupported_capabilities(&features, &v11, &v12, optional.capabilities());
             // Slows everything down, and CUDA has no equivalent.
             features.robust_buffer_access = vk::FALSE;
-            cooperative_matrix.cooperative_matrix_robust_buffer_access = vk::FALSE;
+            optional.turn_off();
             let frame_boundary_enabled = frame_boundary.frame_boundary == vk::TRUE;
             let mut features = chain!(vk::PhysicalDeviceFeatures2::default().features(features));
 
@@ -910,6 +862,23 @@ impl Drop for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every capability number cudash checks is the one Khronos's grammar gives its name.
+    /// Fails if the number does not match the name according to khronos grammar.
+    #[test]
+    fn capability_numbers_match_spirv() {
+        let all = unsupported_capabilities(
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            OptionalFeatures::default().capabilities(),
+        );
+        assert_eq!(all.len(), 19);
+        for (number, name) in all {
+            let capability: spirv::Capability = name.parse().unwrap();
+            assert_eq!(capability as u32, number, "{name}");
+        }
+    }
 
     /// With the `cudarc` feature, device memory is exportable wherever the driver can export
     /// it, so `AsCuda` can lend it. Staging memory never is.
