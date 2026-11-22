@@ -40,7 +40,16 @@ fn non_nvidia_present() -> bool {
 fn gpu_has(name: &str) -> bool {
     use cudash::ash::vk;
     let ctx = cudash::driver::CudaContext::new(0).expect("a Vulkan 1.3 GPU");
-    let (mut atomic, mut atomic2, mut clock, mut rotate, mut quad, mut layout, mut matrix) = (
+    let (
+        mut atomic,
+        mut atomic2,
+        mut clock,
+        mut rotate,
+        mut quad,
+        mut layout,
+        mut matrix,
+        mut vec16,
+    ) = (
         vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default(),
         vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT::default(),
         vk::PhysicalDeviceShaderClockFeaturesKHR::default(),
@@ -48,6 +57,7 @@ fn gpu_has(name: &str) -> bool {
         vk::PhysicalDeviceShaderQuadControlFeaturesKHR::default(),
         vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR::default(),
         vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default(),
+        vk::PhysicalDeviceShaderAtomicFloat16VectorFeaturesNV::default(),
     );
     let mut features = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut atomic)
@@ -56,7 +66,8 @@ fn gpu_has(name: &str) -> bool {
         .push_next(&mut rotate)
         .push_next(&mut quad)
         .push_next(&mut layout)
-        .push_next(&mut matrix);
+        .push_next(&mut matrix)
+        .push_next(&mut vec16);
     // Structs of extensions the driver lacks stay zeroed, which reads as "lacks".
     unsafe {
         ctx.vk_instance()
@@ -72,6 +83,7 @@ fn gpu_has(name: &str) -> bool {
         "subgroup-rotate" => on(rotate.shader_subgroup_rotate),
         "quad-control" => on(quad.shader_quad_control),
         "explicit-layout" => on(layout.workgroup_memory_explicit_layout),
+        "float16-vector-atomics" => on(vec16.shader_float16_vector_atomics),
         "cooperative-matrix" => on(matrix.cooperative_matrix),
         other => panic!("unknown GPU feature {other:?} in a tag"),
     }

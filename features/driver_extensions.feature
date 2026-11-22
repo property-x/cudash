@@ -81,10 +81,15 @@ Feature: Optional shader extensions in cudash::driver
     Then the result is a MissingFeature error for AtomicFloat64AddEXT
 
   # Capability 5404 is AtomicFloat16VectorNV, from an NVIDIA-only extension.
-  @vulkan @non-nvidia
-  Scenario: An NVIDIA-only capability is refused on another vendor's GPU
+  @vulkan @gpu-lacks-float16-vector-atomics
+  Scenario: An NVIDIA-only capability is refused on a GPU without it
     When I load a module declaring the capabilities 5404
     Then the result is a MissingFeature error for AtomicFloat16VectorNV
+
+  @vulkan @gpu-has-float16-vector-atomics
+  Scenario: An NVIDIA-only capability is accepted on a GPU with it
+    When I load a module declaring the capabilities 1 and 5404
+    Then the result is no error
 
   # ---- Modules declaring only supported capabilities -----------------------------------
 
