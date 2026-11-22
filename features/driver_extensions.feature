@@ -118,6 +118,170 @@ Feature: Optional shader extensions in cudash::driver
     When I load a module declaring the capabilities 1 and 6022
     Then the result is no error
 
+  # ---- Extensions that need the ash_latest feature ---------------------------------------
+  # Each capability is checked on hand-made modules, accepted where the GPU has the feature bit
+  # and refused where it lacks it. Slang can't emit any of them, so no kernel runs. Without the
+  # ash_latest Cargo feature these scenarios are skipped.
+
+  @vulkan @ash-latest @gpu-has-bfloat16-type
+  Scenario: A GPU with the feature accepts BFloat16TypeKHR
+    When I load a module declaring the capabilities 1 and 5116
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-bfloat16-dot-product
+  Scenario: A GPU with the feature accepts BFloat16DotProductKHR
+    When I load a module declaring the capabilities 1 and 5117
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-bfloat16-cooperative-matrix
+  Scenario: A GPU with the feature accepts BFloat16CooperativeMatrixKHR
+    When I load a module declaring the capabilities 1 and 5118
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-float8
+  Scenario: A GPU with the feature accepts Float8EXT
+    When I load a module declaring the capabilities 1 and 4212
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-float8-cooperative-matrix
+  Scenario: A GPU with the feature accepts Float8CooperativeMatrixEXT
+    When I load a module declaring the capabilities 1 and 4213
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-untyped-pointers
+  Scenario: A GPU with the feature accepts UntypedPointersKHR
+    When I load a module declaring the capabilities 1 and 4473
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-replicated-composites
+  Scenario: A GPU with the feature accepts ReplicatedCompositesEXT
+    When I load a module declaring the capabilities 1 and 6024
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-matrix-reductions
+  Scenario: A GPU with the feature accepts CooperativeMatrixReductionsNV
+    When I load a module declaring the capabilities 1 and 5430
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-matrix-conversions
+  Scenario: A GPU with the feature accepts CooperativeMatrixConversionsNV
+    When I load a module declaring the capabilities 1 and 5431
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-matrix-per-element-operations
+  Scenario: A GPU with the feature accepts CooperativeMatrixPerElementOperationsNV
+    When I load a module declaring the capabilities 1 and 5432
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-matrix-tensor-addressing
+  Scenario: A GPU with the feature accepts CooperativeMatrixTensorAddressingNV
+    When I load a module declaring the capabilities 1 and 5433
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-matrix-block-loads
+  Scenario: A GPU with the feature accepts CooperativeMatrixBlockLoadsNV
+    When I load a module declaring the capabilities 1 and 5434
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-matrix-tensor-addressing
+  Scenario: A GPU with the feature accepts TensorAddressingNV
+    When I load a module declaring the capabilities 1 and 5439
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-vector
+  Scenario: A GPU with the feature accepts CooperativeVectorNV
+    When I load a module declaring the capabilities 1 and 5394
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-has-cooperative-vector-training
+  Scenario: A GPU with the feature accepts CooperativeVectorTrainingNV
+    When I load a module declaring the capabilities 1 and 5435
+    Then the result is no error
+
+  @vulkan @ash-latest @gpu-lacks-bfloat16-type
+  Scenario: A GPU without the feature refuses BFloat16TypeKHR
+    When I load a module declaring the capabilities 1 and 5116
+    Then the result is a MissingFeature error for BFloat16TypeKHR
+
+  @vulkan @ash-latest @gpu-lacks-bfloat16-dot-product
+  Scenario: A GPU without the feature refuses BFloat16DotProductKHR
+    When I load a module declaring the capabilities 1 and 5117
+    Then the result is a MissingFeature error for BFloat16DotProductKHR
+
+  @vulkan @ash-latest @gpu-lacks-bfloat16-cooperative-matrix
+  Scenario: A GPU without the feature refuses BFloat16CooperativeMatrixKHR
+    When I load a module declaring the capabilities 1 and 5118
+    Then the result is a MissingFeature error for BFloat16CooperativeMatrixKHR
+
+  @vulkan @ash-latest @gpu-lacks-float8
+  Scenario: A GPU without the feature refuses Float8EXT
+    When I load a module declaring the capabilities 1 and 4212
+    Then the result is a MissingFeature error for Float8EXT
+
+  @vulkan @ash-latest @gpu-lacks-float8-cooperative-matrix
+  Scenario: A GPU without the feature refuses Float8CooperativeMatrixEXT
+    When I load a module declaring the capabilities 1 and 4213
+    Then the result is a MissingFeature error for Float8CooperativeMatrixEXT
+
+  @vulkan @ash-latest @gpu-lacks-untyped-pointers
+  Scenario: A GPU without the feature refuses UntypedPointersKHR
+    When I load a module declaring the capabilities 1 and 4473
+    Then the result is a MissingFeature error for UntypedPointersKHR
+
+  @vulkan @ash-latest @gpu-lacks-replicated-composites
+  Scenario: A GPU without the feature refuses ReplicatedCompositesEXT
+    When I load a module declaring the capabilities 1 and 6024
+    Then the result is a MissingFeature error for ReplicatedCompositesEXT
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-matrix-reductions
+  Scenario: A GPU without the feature refuses CooperativeMatrixReductionsNV
+    When I load a module declaring the capabilities 1 and 5430
+    Then the result is a MissingFeature error for CooperativeMatrixReductionsNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-matrix-conversions
+  Scenario: A GPU without the feature refuses CooperativeMatrixConversionsNV
+    When I load a module declaring the capabilities 1 and 5431
+    Then the result is a MissingFeature error for CooperativeMatrixConversionsNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-matrix-per-element-operations
+  Scenario: A GPU without the feature refuses CooperativeMatrixPerElementOperationsNV
+    When I load a module declaring the capabilities 1 and 5432
+    Then the result is a MissingFeature error for CooperativeMatrixPerElementOperationsNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-matrix-tensor-addressing
+  Scenario: A GPU without the feature refuses CooperativeMatrixTensorAddressingNV
+    When I load a module declaring the capabilities 1 and 5433
+    Then the result is a MissingFeature error for CooperativeMatrixTensorAddressingNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-matrix-block-loads
+  Scenario: A GPU without the feature refuses CooperativeMatrixBlockLoadsNV
+    When I load a module declaring the capabilities 1 and 5434
+    Then the result is a MissingFeature error for CooperativeMatrixBlockLoadsNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-matrix-tensor-addressing
+  Scenario: A GPU without the feature refuses TensorAddressingNV
+    When I load a module declaring the capabilities 1 and 5439
+    Then the result is a MissingFeature error for TensorAddressingNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-vector
+  Scenario: A GPU without the feature refuses CooperativeVectorNV
+    When I load a module declaring the capabilities 1 and 5394
+    Then the result is a MissingFeature error for CooperativeVectorNV
+
+  @vulkan @ash-latest @gpu-lacks-cooperative-vector-training
+  Scenario: A GPU without the feature refuses CooperativeVectorTrainingNV
+    When I load a module declaring the capabilities 1 and 5435
+    Then the result is a MissingFeature error for CooperativeVectorTrainingNV
+
+  # VK_KHR_shader_relaxed_extended_instruction has no capability. It makes the NonSemantic debug
+  # info that `slangc -g` writes valid, so the scenario loads and runs such a kernel.
+  @vulkan @ash-latest @gpu-has-relaxed-extended-instruction
+  Scenario: A kernel built with debug info loads and runs
+    Given the Slang SPIR-V build of "double_all" with debug info as "double" with entry point "double_all"
+    And a buffer "a" of 1024 f32 elements all set to 1.5
+    When I launch "double" on "a" with n 1024
+    Then the buffer "a" holds 3 in every element
+
   # ---- Malformed modules -----------------------------------------------------------------
 
   @vulkan

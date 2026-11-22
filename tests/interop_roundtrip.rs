@@ -3,9 +3,13 @@
 
 mod common;
 
-use ash::vk;
+#[cfg(feature = "ash_latest")]
+use common::push_next::PushNext as _;
 use common::{Nvidia, nvidia};
-use cudash::interop::{AsCuda, SharedSemaphore};
+use cudash::{
+    ash::vk,
+    interop::{AsCuda, SharedSemaphore},
+};
 
 const TIMEOUT_NS: u64 = 5_000_000_000;
 

@@ -4,6 +4,9 @@ pub mod driver;
 pub mod extensions;
 pub mod graph;
 pub mod interop;
+#[cfg(feature = "ash_latest")]
+#[path = "../common/push_next.rs"]
+mod push_next;
 pub mod slang;
 pub mod world;
 
@@ -39,6 +42,8 @@ fn non_nvidia_present() -> bool {
 /// `@gpu-has-<name>` and `@gpu-lacks-<name>` tags use.
 fn gpu_has(name: &str) -> bool {
     use cudash::ash::vk;
+    #[cfg(feature = "ash_latest")]
+    use push_next::PushNext as _;
     let ctx = cudash::driver::CudaContext::new(0).expect("a Vulkan 1.3 GPU");
     let (
         mut atomic,
@@ -85,6 +90,80 @@ fn gpu_has(name: &str) -> bool {
         "explicit-layout" => on(layout.workgroup_memory_explicit_layout),
         "float16-vector-atomics" => on(vec16.shader_float16_vector_atomics),
         "cooperative-matrix" => on(matrix.cooperative_matrix),
+        #[cfg(feature = "ash_latest")]
+        other => gpu_has_latest(other),
+        #[cfg(not(feature = "ash_latest"))]
+        other => panic!("unknown GPU feature {other:?} in a tag"),
+    }
+}
+
+/// `gpu_has` for the extensions only ash from git knows.
+#[cfg(feature = "ash_latest")]
+fn gpu_has_latest(name: &str) -> bool {
+    use cudash::ash::vk;
+    use push_next::PushNext as _;
+    let ctx = cudash::driver::CudaContext::new(0).expect("a Vulkan 1.3 GPU");
+    let extension = match name {
+        n if n.starts_with("bfloat16") => c"VK_KHR_shader_bfloat16",
+        n if n.starts_with("float8") => c"VK_EXT_shader_float8",
+        "untyped-pointers" => c"VK_KHR_shader_untyped_pointers",
+        "relaxed-extended-instruction" => c"VK_KHR_shader_relaxed_extended_instruction",
+        "replicated-composites" => c"VK_EXT_shader_replicated_composites",
+        n if n.starts_with("cooperative-matrix") => c"VK_NV_cooperative_matrix2",
+        n if n.starts_with("cooperative-vector") => c"VK_NV_cooperative_vector",
+        other => panic!("unknown GPU feature {other:?} in a tag"),
+    };
+    // Mesa fills the feature structs of extensions it doesn't expose (RADV says bfloat16 is on
+    // without VK_KHR_shader_bfloat16), so the extension has to be listed too.
+    let listed = unsafe {
+        ctx.vk_instance()
+            .enumerate_device_extension_properties(ctx.vk_physical_device())
+    }
+    .expect("device extensions")
+    .iter()
+    .any(|p| p.extension_name_as_c_str() == Ok(extension));
+    if !listed {
+        return false;
+    }
+    let mut bf16 = vk::PhysicalDeviceShaderBfloat16FeaturesKHR::default();
+    let mut fp8 = vk::PhysicalDeviceShaderFloat8FeaturesEXT::default();
+    let mut untyped = vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR::default();
+    let mut relaxed = vk::PhysicalDeviceShaderRelaxedExtendedInstructionFeaturesKHR::default();
+    let mut replicated = vk::PhysicalDeviceShaderReplicatedCompositesFeaturesEXT::default();
+    let mut matrix2 = vk::PhysicalDeviceCooperativeMatrix2FeaturesNV::default();
+    let mut vector = vk::PhysicalDeviceCooperativeVectorFeaturesNV::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default()
+        .push_next(&mut bf16)
+        .push_next(&mut fp8)
+        .push_next(&mut untyped)
+        .push_next(&mut relaxed)
+        .push_next(&mut replicated)
+        .push_next(&mut matrix2)
+        .push_next(&mut vector);
+    // Structs of extensions the driver lacks stay zeroed, which reads as "lacks".
+    unsafe {
+        ctx.vk_instance()
+            .get_physical_device_features2(ctx.vk_physical_device(), &mut features)
+    };
+    let on = |b: vk::Bool32| b == vk::TRUE;
+    match name {
+        "bfloat16-type" => on(bf16.shader_b_float16_type),
+        "bfloat16-dot-product" => on(bf16.shader_b_float16_dot_product),
+        "bfloat16-cooperative-matrix" => on(bf16.shader_b_float16_cooperative_matrix),
+        "float8" => on(fp8.shader_float8),
+        "float8-cooperative-matrix" => on(fp8.shader_float8_cooperative_matrix),
+        "untyped-pointers" => on(untyped.shader_untyped_pointers),
+        "relaxed-extended-instruction" => on(relaxed.shader_relaxed_extended_instruction),
+        "replicated-composites" => on(replicated.shader_replicated_composites),
+        "cooperative-matrix-reductions" => on(matrix2.cooperative_matrix_reductions),
+        "cooperative-matrix-conversions" => on(matrix2.cooperative_matrix_conversions),
+        "cooperative-matrix-per-element-operations" => {
+            on(matrix2.cooperative_matrix_per_element_operations)
+        }
+        "cooperative-matrix-tensor-addressing" => on(matrix2.cooperative_matrix_tensor_addressing),
+        "cooperative-matrix-block-loads" => on(matrix2.cooperative_matrix_block_loads),
+        "cooperative-vector" => on(vector.cooperative_vector),
+        "cooperative-vector-training" => on(vector.cooperative_vector_training),
         other => panic!("unknown GPU feature {other:?} in a tag"),
     }
 }
@@ -121,6 +200,8 @@ pub fn selected(
         Some("needs two NVIDIA GPUs")
     } else if has("no-vulkan") {
         Some("needs a machine without a Vulkan loader")
+    } else if has("ash-latest") && !cfg!(feature = "ash_latest") {
+        Some("needs the ash_latest Cargo feature")
     } else if gpu_tag("gpu-has-").is_some_and(|f| !gpu_has(f)) {
         Some("needs a GPU feature this one lacks")
     } else if gpu_tag("gpu-lacks-").is_some_and(gpu_has) {

@@ -1,6 +1,8 @@
 //! Helpers shared by the GPU test files. Not a test target itself.
 #![allow(dead_code)]
 
+pub mod push_next;
+
 use std::{fmt::Display, sync::Arc};
 
 use cudash::{

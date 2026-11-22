@@ -10,10 +10,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::ash::{ext, khr, vk};
 #[cfg(feature = "ash_latest")]
 use crate::compat::PushNext as _;
-use crate::compat::load_ext;
+use crate::{
+    ash::{ext, khr, vk},
+    compat::load_ext,
+};
 
 use super::{DriverError, stream::Tracking};
 
@@ -141,7 +143,10 @@ fn enumerate() -> Result<(&'static Vulkan, Vec<vk::PhysicalDevice>), DriverError
 
 /// Extensions cudash uses when the GPU has them: host import for registered memory, and
 /// with the `cudarc` feature, exporting memory and semaphores to CUDA.
-fn available_extensions(instance: &crate::ash::Instance, pd: vk::PhysicalDevice) -> Vec<&'static CStr> {
+fn available_extensions(
+    instance: &crate::ash::Instance,
+    pd: vk::PhysicalDevice,
+) -> Vec<&'static CStr> {
     let have = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
     let mut wanted = vec![
         ext::external_memory_host::NAME,

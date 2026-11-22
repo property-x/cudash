@@ -286,7 +286,11 @@ impl<T> CudaSlice<T> {
             ));
         }
         let device = &self.buffer.device;
-        let functions = load_ext!(crate::ash::khr::external_memory_fd::Device, &device.instance, &device.device);
+        let functions = load_ext!(
+            crate::ash::khr::external_memory_fd::Device,
+            &device.instance,
+            &device.device
+        );
         let info = vk::MemoryGetFdInfoKHR::default()
             .memory(self.buffer.memory)
             .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);

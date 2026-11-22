@@ -7,10 +7,12 @@ use std::{
     sync::Arc,
 };
 
-use crate::ash::{khr, vk};
 #[cfg(feature = "ash_latest")]
 use crate::compat::PushNext as _;
-use crate::compat::load_ext;
+use crate::{
+    ash::{khr, vk},
+    compat::load_ext,
+};
 
 use crate::{
     driver::device::Device,
@@ -45,8 +47,16 @@ impl VulkanExporter {
         }
         Ok(Self {
             device: device.clone(),
-            memory_fd: load_ext!(khr::external_memory_fd::Device, &device.instance, &device.device),
-            semaphore_fd: load_ext!(khr::external_semaphore_fd::Device, &device.instance, &device.device),
+            memory_fd: load_ext!(
+                khr::external_memory_fd::Device,
+                &device.instance,
+                &device.device
+            ),
+            semaphore_fd: load_ext!(
+                khr::external_semaphore_fd::Device,
+                &device.instance,
+                &device.device
+            ),
         })
     }
 

@@ -1,8 +1,10 @@
 //! cudarc's `examples/12-context-config.rs` (MIT OR Apache-2.0) on Vulkan. CUDA's limits and
 //! cache settings have no equivalent, and Vulkan's limits are fixed, so this only reads them.
 
-use cudash::ash::vk;
-use cudash::driver::{CudaContext, DriverError};
+use cudash::{
+    ash::vk,
+    driver::{CudaContext, DriverError},
+};
 
 fn main() -> Result<(), DriverError> {
     let dev = CudaContext::new(0)?;

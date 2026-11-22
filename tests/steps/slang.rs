@@ -21,6 +21,32 @@ struct MyCoolStruct {
 // SAFETY: #[repr(C)] and plain data, matching write_struct.slang.
 unsafe impl driver::DeviceRepr for MyCoolStruct {}
 
+/// Compiles `tests/kernels/<file>.slang` with `slangc -g`, which writes NonSemantic debug info.
+#[given(
+    regex = r#"^the Slang SPIR-V build of "(\w+)" with debug info as "(\w+)" with entry point "(\w+)"$"#
+)]
+fn given_slang_spirv_debug(w: &mut World, file: String, name: String, entry: String) {
+    let out = std::path::Path::new(env!("OUT_DIR")).join(format!("{file}_debug.spv"));
+    let status =
+        std::process::Command::new(std::env::var("SLANGC").unwrap_or_else(|_| "slangc".into()))
+            .arg(format!(
+                "{}/tests/kernels/{file}.slang",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .args(["-target", "spirv", "-fvk-use-entrypoint-name", "-g", "-o"])
+            .arg(&out)
+            .status()
+            .expect("slangc runs");
+    assert!(status.success(), "slangc -g failed on {file}");
+    let function = w
+        .ctx()
+        .load_module(Spirv::from_file(&out))
+        .and_then(|module| module.load_function(&entry));
+    if let Some(function) = w.record(function) {
+        w.kernels.insert(name, Arc::new(function));
+    }
+}
+
 #[given(regex = r#"^the Slang SPIR-V build of "(\w+)" as "(\w+)" with entry point "(\w+)"$"#)]
 fn given_slang_spirv(w: &mut World, file: String, name: String, entry: String) {
     let path = std::path::Path::new(env!("OUT_DIR")).join(format!("{file}.spv"));

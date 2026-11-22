@@ -119,4 +119,71 @@ optional_extensions! {
         capabilities: [ShaderSMBuiltinsNV(5373): [shader_sm_builtins]],
         off: [],
     },
+
+    // bfloat16 values, dot products and cooperative matrices, as CUDA's __nv_bfloat16. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_KHR_shader_bfloat16" => PhysicalDeviceShaderBfloat16FeaturesKHR {
+        capabilities: [
+            BFloat16TypeKHR(5116): [shader_b_float16_type],
+            BFloat16DotProductKHR(5117): [shader_b_float16_dot_product],
+            BFloat16CooperativeMatrixKHR(5118): [shader_b_float16_cooperative_matrix],
+        ],
+        off: [],
+    },
+
+    // fp8 (e4m3, e5m2) values and cooperative matrices, as CUDA's __nv_fp8_e4m3. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_EXT_shader_float8" => PhysicalDeviceShaderFloat8FeaturesEXT {
+        capabilities: [
+            Float8EXT(4212): [shader_float8],
+            Float8CooperativeMatrixEXT(4213): [shader_float8_cooperative_matrix],
+        ],
+        off: [],
+    },
+
+    // Raw pointers that can be cast between types, as CUDA's void*. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_KHR_shader_untyped_pointers" => PhysicalDeviceShaderUntypedPointersFeaturesKHR {
+        capabilities: [UntypedPointersKHR(4473): [shader_untyped_pointers]],
+        off: [],
+    },
+
+    // Makes the debug info of `slangc -g` valid SPIR-V, for Slang source in RenderDoc. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_KHR_shader_relaxed_extended_instruction" => PhysicalDeviceShaderRelaxedExtendedInstructionFeaturesKHR {
+        capabilities: [],
+        off: [],
+    },
+
+    // Filling a vector or matrix with one value in a single instruction. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_EXT_shader_replicated_composites" => PhysicalDeviceShaderReplicatedCompositesFeaturesEXT {
+        capabilities: [ReplicatedCompositesEXT(6024): [shader_replicated_composites]],
+        off: [],
+    },
+
+    // Workgroup-wide and flexibly sized cooperative matrices, with reductions, conversions and
+    // tensor loads. Needs VK_KHR_cooperative_matrix above. NVIDIA only. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_NV_cooperative_matrix2" => PhysicalDeviceCooperativeMatrix2FeaturesNV {
+        capabilities: [
+            CooperativeMatrixReductionsNV(5430): [cooperative_matrix_reductions],
+            CooperativeMatrixConversionsNV(5431): [cooperative_matrix_conversions],
+            CooperativeMatrixPerElementOperationsNV(5432): [cooperative_matrix_per_element_operations],
+            CooperativeMatrixTensorAddressingNV(5433): [cooperative_matrix_tensor_addressing],
+            CooperativeMatrixBlockLoadsNV(5434): [cooperative_matrix_block_loads],
+            TensorAddressingNV(5439): [cooperative_matrix_tensor_addressing],
+        ],
+        off: [],
+    },
+
+    // Matrix-vector products for small neural networks, on tensor cores. NVIDIA only. (cost: none)
+    #[cfg(feature = "ash_latest")]
+    c"VK_NV_cooperative_vector" => PhysicalDeviceCooperativeVectorFeaturesNV {
+        capabilities: [
+            CooperativeVectorNV(5394): [cooperative_vector],
+            CooperativeVectorTrainingNV(5435): [cooperative_vector_training],
+        ],
+        off: [],
+    },
 }

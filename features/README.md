@@ -42,4 +42,5 @@ One home per behavior, so the two don't drift apart:
 | `@planned`       | Designed in `plan/api.md`, not implemented                                           |
 | `@open-question` | Depends on something the project hasn't settled. See `notes/`                        |
 | `@gpu-has-<x>`, `@gpu-lacks-<x>` | Skips unless the first GPU has (or lacks) a shader feature. Names are in `gpu_has` in `tests/steps/mod.rs` |
+| `@ash-latest`    | Needs the `ash_latest` Cargo feature. Skips without it. `@gpu-has-`/`@gpu-lacks-` names for these extensions are in `gpu_has_latest`, which also needs the extension listed (Mesa fills feature structs of extensions it doesn't expose) |
 | `@known-gap`     | Known to fail today. The scenario states the intended behaviour                      |
