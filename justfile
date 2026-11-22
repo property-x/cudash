@@ -20,7 +20,7 @@ setup:
         vulkan-tools vulkan-validationlayers spirv-tools
     # After apt: cargo install links with cc, which a fresh ubuntu:26.04 doesn't have until build-essential is installed
     rustup component add rustfmt clippy
-    rustup toolchain install nightly --component rustfmt
+    rustup toolchain install nightly --component rustfmt,clippy
     # Ubuntu's mdbook is 0.4.x, and 0.5 is current. cargo skips the build when this version is already installed.
     cargo install --locked mdbook --version 0.5.4
     # Slang looks for the unversioned library name, which the package doesn't provide.
