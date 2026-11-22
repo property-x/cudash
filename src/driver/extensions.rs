@@ -90,4 +90,33 @@ optional_extensions! {
         capabilities: [ExpectAssumeKHR(5629): [shader_expect_assume]],
         off: [],
     },
+
+    // Reading the same shared memory as different types, as extern __shared__ and unions. (cost: none)
+    c"VK_KHR_workgroup_memory_explicit_layout" => PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR {
+        capabilities: [
+            WorkgroupMemoryExplicitLayoutKHR(4428): [workgroup_memory_explicit_layout],
+            WorkgroupMemoryExplicitLayout8BitAccessKHR(4429): [workgroup_memory_explicit_layout8_bit_access],
+            WorkgroupMemoryExplicitLayout16BitAccessKHR(4430): [workgroup_memory_explicit_layout16_bit_access],
+        ],
+        off: [],
+    },
+
+    // Operations across the 4 threads of a quad, and branches they take together. (cost: none)
+    // Needs VK_KHR_shader_maximal_reconvergence above. 
+    c"VK_KHR_shader_quad_control" => PhysicalDeviceShaderQuadControlFeaturesKHR {
+        capabilities: [QuadControlKHR(5087): [shader_quad_control]],
+        off: [],
+    },
+
+    // Atomic add, min and max on __half2 vectors, as CUDA's atomicAdd(__half2*). NVIDIA only. (cost: none)
+    c"VK_NV_shader_atomic_float16_vector" => PhysicalDeviceShaderAtomicFloat16VectorFeaturesNV {
+        capabilities: [AtomicFloat16VectorNV(5404): [shader_float16_vector_atomics]],
+        off: [],
+    },
+
+    // The SM and warp a thread runs on, and their counts, as %smid and %warpid. NVIDIA only. (cost: none)
+    c"VK_NV_shader_sm_builtins" => PhysicalDeviceShaderSMBuiltinsFeaturesNV {
+        capabilities: [ShaderSMBuiltinsNV(5373): [shader_sm_builtins]],
+        off: [],
+    },
 }

@@ -114,6 +114,18 @@ fn for_each_instruction<R>(
         if op == OP_FUNCTION {
             break;
         }
+        // The fewest operands each instruction read below can have, so `visit` can index them.
+        let min_operands = match op {
+            OP_CAPABILITY => 1,
+            OP_EXECUTION_MODE => 2,
+            OP_ENTRY_POINT => 3,
+            _ => 0,
+        };
+        if count - 1 < min_operands {
+            return Err(DriverError::InvalidModule(
+                "instruction missing operands".into(),
+            ));
+        }
         if let Some(found) = visit(i, op, &words[i + 1..i + count]) {
             return Ok(Some(found));
         }
@@ -512,6 +524,13 @@ mod tests {
         words[7] = 15; // an instruction claiming zero length
         assert!(find_entry_point(&words, "main").is_err());
         words[7] = (99 << 16) | OP_ENTRY_POINT; // one running past the end
+        assert!(find_entry_point(&words, "main").is_err());
+
+        words[7] = (1 << 16) | OP_ENTRY_POINT; // one without operands
+        assert!(find_entry_point(&words, "main").is_err());
+        let mut words = module();
+        words[5] = (1 << 16) | OP_CAPABILITY; // `OpCapability` with no capability,
+        words[6] = 1 << 16; // then `OpNop`
         assert!(find_entry_point(&words, "main").is_err());
 
         // The entry point is fine, and the block size instruction after it is cut off.

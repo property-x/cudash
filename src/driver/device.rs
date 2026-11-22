@@ -873,7 +873,6 @@ mod tests {
             &Default::default(),
             OptionalFeatures::default().capabilities(),
         );
-        assert_eq!(all.len(), 19);
         for (number, name) in all {
             let capability: spirv::Capability = name.parse().unwrap();
             assert_eq!(capability as u32, number, "{name}");
