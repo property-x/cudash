@@ -46,6 +46,14 @@ harness = false
 name = "transfer"
 harness = false
 
+[[bench]]
+name = "submit_cost"
+harness = false
+
+[[bench]]
+name = "launch_cost"
+harness = false
+
 [[test]]
 name = "interop_kernels"
 required-features = ["cuda"]
