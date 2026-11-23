@@ -24,6 +24,8 @@ cuda = ["dep:cudarc"]
 # On by default. Compiles the Slang kernels with `-g`, so RenderDoc shows their source and can step
 # through a thread. This embeds the kernel source in the SPIR-V: turn it off for builds you ship.
 kernel_debug = []
+# Off by default. Adds APIs that are still being tried out and may change: `GpuStream::set_batching` and `flush`.
+experimental = []
 # Allows us to use latest ash features
 ash_latest = ["dep:ash_latest"]
 
@@ -53,6 +55,15 @@ harness = false
 [[bench]]
 name = "launch_cost"
 harness = false
+
+[[bench]]
+name = "submit_strategy"
+harness = false
+
+[[bench]]
+name = "batching"
+harness = false
+required-features = ["experimental"]
 
 [[test]]
 name = "interop_kernels"

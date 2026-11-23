@@ -135,7 +135,7 @@ fn when_threads(w: &mut World, name: String, times: usize) {
 
 #[when(regex = r#"^I begin capturing on a new stream "(\w+)" and drop it$"#)]
 fn when_drop_capturing(w: &mut World, name: String) {
-    let stream = w.ctx().new_stream().unwrap();
+    let stream = super::batched(w.ctx().new_stream().unwrap());
     stream.begin_capture(RELAXED).unwrap();
     w.streams.insert(name.clone(), stream);
     w.streams.remove(&name);

@@ -6,6 +6,16 @@ use std::sync::Arc;
 
 use cudash::driver::*;
 
+/// Batching on for every stream when `CUDASH_TEST_BATCHING` is set (needs the `experimental` feature).
+#[allow(unused_variables)]
+fn batched(stream: Arc<GpuStream>) -> Arc<GpuStream> {
+    #[cfg(feature = "experimental")]
+    if std::env::var_os("CUDASH_TEST_BATCHING").is_some() {
+        stream.set_batching(true).unwrap();
+    }
+    stream
+}
+
 const SIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sin_kernel.spv"));
 const DOUBLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/double_all.spv"));
 const WRITE_STRUCT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/write_struct.spv"));
@@ -26,7 +36,7 @@ fn double(stream: &GpuStream, f: &GpuFunction, x: &mut GpuSlice<f32>) {
 #[test]
 fn example_allocate() -> Result<(), DriverError> {
     let ctx = GpuContext::new(0)?;
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
 
     // unsafe initialization of unset memory
     let _: GpuSlice<f32> = unsafe { stream.alloc::<f32>(10) }?;
@@ -45,7 +55,7 @@ fn example_allocate() -> Result<(), DriverError> {
 #[test]
 fn example_copy() -> Result<(), DriverError> {
     let ctx = GpuContext::new(0)?;
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
 
     let a: GpuSlice<f64> = stream.alloc_zeros::<f64>(10)?;
     let mut b = stream.alloc_zeros::<f64>(10)?;
@@ -76,7 +86,7 @@ fn example_copy() -> Result<(), DriverError> {
 #[test]
 fn example_launch_kernel() -> Result<(), DriverError> {
     let ctx = GpuContext::new(0)?;
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
 
     let module = ctx.load_module(Spirv::from_binary(SIN.to_vec()))?;
     let f = module.load_function("sin_kernel")?;
@@ -108,7 +118,7 @@ fn example_launch_kernel() -> Result<(), DriverError> {
 #[test]
 fn example_streams() -> Result<(), DriverError> {
     let ctx = GpuContext::new(0)?;
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
 
     let module = ctx.load_module(Spirv::from_binary(SIN.to_vec()))?;
     let f = module.load_function("sin_kernel")?;
@@ -119,7 +129,7 @@ fn example_streams() -> Result<(), DriverError> {
     let mut b_dev = stream.alloc_zeros::<f32>(n as usize)?;
 
     // the copy and alloc_zeros above complete before work on this stream starts
-    let stream2 = stream.fork()?;
+    let stream2 = batched(stream.fork()?);
 
     let mut builder = stream2.launch_builder(&f);
     builder.arg(&mut b_dev);
@@ -155,7 +165,7 @@ unsafe impl DeviceRepr for MyCoolRustStruct {}
 #[test]
 fn example_device_repr() -> Result<(), DriverError> {
     let ctx = GpuContext::new(0)?;
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
     let f = load(&ctx, WRITE_STRUCT, "write_struct");
 
     let thing = MyCoolRustStruct {
@@ -176,7 +186,7 @@ fn example_device_repr() -> Result<(), DriverError> {
 #[test]
 fn kernels_cover_every_element_across_many_blocks() {
     let ctx = GpuContext::new(0).unwrap();
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
     let f = load(&ctx, DOUBLE, "double_all");
     // More than one block of 1024, in a shader that declares a block of 1.
     let mut a = stream.clone_htod(&vec![1.0f32; 5000]).unwrap();
@@ -187,7 +197,7 @@ fn kernels_cover_every_element_across_many_blocks() {
 #[test]
 fn views_work_like_slices() {
     let ctx = GpuContext::new(0).unwrap();
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
     let mut a = stream.clone_htod(&[1u32, 2, 3, 4]).unwrap();
 
     stream.memcpy_htod(&[9u32], &mut a.slice_mut(1..2)).unwrap();
@@ -208,7 +218,7 @@ fn views_work_like_slices() {
 #[test]
 fn clones_are_independent() {
     let ctx = GpuContext::new(0).unwrap();
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
     let a = stream.clone_htod(&[1u32, 2]).unwrap();
     let mut b = a.clone();
     stream.memcpy_htod(&[5u32, 6], &mut b).unwrap();
@@ -243,7 +253,7 @@ fn many_contexts_in_turn() -> Result<(), DriverError> {
     for i in 0..100 {
         assert!(GpuContext::device_count()? >= 1, "context {i}");
         let ctx = GpuContext::new(0)?;
-        let stream = ctx.default_stream();
+        let stream = batched(ctx.default_stream());
         let x = stream.clone_htod(&[i as u32; 4])?;
         assert_eq!(stream.clone_dtoh(&x)?, [i as u32; 4]);
     }

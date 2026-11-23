@@ -105,6 +105,10 @@ impl GpuContext {
 
     /// Blocks until all work on this GPU has finished.
     pub fn synchronize(&self) -> Result<(), DriverError> {
+        let batching: Vec<_> = self.device.batching.lock().unwrap().clone();
+        for stream in batching.iter().filter_map(std::sync::Weak::upgrade) {
+            stream.flush()?;
+        }
         let queue = self.device.queue.lock().unwrap();
         unsafe { self.device.device.queue_wait_idle(*queue) }.map_err(|e| self.device.error(e))?;
         Ok(())

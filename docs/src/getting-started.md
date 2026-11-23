@@ -12,8 +12,9 @@
 
 | Feature | Default | What it does |
 |---|---|---|
-| `cudarc` | On | Adds `cudash::interop` and the cudarc dependency. Without CUDA at run time, interop calls return errors; the rest works |
+| `cuda` | On | Adds `cudash::interop` and the cudarc dependency. Without CUDA at run time, interop calls return errors; the rest works |
 | `kernel_debug` | On | Compiles the crate's own kernels with `slangc -g`, so RenderDoc shows their source. This embeds the source in the binary, so turn it off for builds you ship |
+| `experimental` | Off | Adds APIs still being tried out, which may change: stream batching (see [Streams](streams.md#batching-experimental)) |
 
 With `--no-default-features`, cudash has no cudarc dependency at all.
 

@@ -14,6 +14,16 @@ use cudash::{
     },
 };
 
+/// Batching on for every stream when `CUDASH_TEST_BATCHING` is set (needs the `experimental` feature).
+#[allow(unused_variables)]
+fn batched(stream: Arc<GpuStream>) -> Arc<GpuStream> {
+    #[cfg(feature = "experimental")]
+    if std::env::var_os("CUDASH_TEST_BATCHING").is_some() {
+        stream.set_batching(true).unwrap();
+    }
+    stream
+}
+
 const DOUBLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/double_all.spv"));
 
 /// Copies the image into a slice with `vkCmdCopyImageToBuffer` and reads that.
@@ -90,7 +100,7 @@ fn read_back<T: ImageFormat + ValidAsZeroBits + Copy>(
 
 fn setup() -> (Arc<GpuContext>, Arc<GpuStream>) {
     let ctx = GpuContext::new(0).unwrap();
-    let stream = ctx.default_stream();
+    let stream = batched(ctx.default_stream());
     (ctx, stream)
 }
 
@@ -164,7 +174,7 @@ fn dropping_an_image_while_its_copy_is_in_flight_is_fine() {
 #[test]
 fn a_kernel_on_another_stream_finishes_before_the_copy() {
     let (ctx, stream) = setup();
-    let other = ctx.new_stream().unwrap();
+    let other = batched(ctx.new_stream().unwrap());
     let module = ctx.load_module(Spirv::from_binary(DOUBLE)).unwrap();
     let double = module.load_function("double_all").unwrap();
     let n = 1 << 20;
@@ -182,7 +192,7 @@ fn a_kernel_on_another_stream_finishes_before_the_copy() {
 #[test]
 fn a_write_after_the_copy_does_not_change_the_image() {
     let (ctx, stream) = setup();
-    let other = ctx.new_stream().unwrap();
+    let other = batched(ctx.new_stream().unwrap());
     let mut slice = stream.clone_htod(&vec![5.0f32; 1 << 20]).unwrap();
     let image = stream.clone_to_image(&slice, 1024, 1024).unwrap();
     other.memset_zeros(&mut slice).unwrap();

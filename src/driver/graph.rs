@@ -83,15 +83,7 @@ impl Capture {
         let command_buffer = match self.current {
             Some(command_buffer) => {
                 // Separate submissions get this from their timeline waits.
-                let barrier = [vk::MemoryBarrier2::default()
-                    .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                    .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                    .dst_access_mask(
-                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-                    )];
-                let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
-                unsafe { device.cmd_pipeline_barrier2(command_buffer, &dependency) };
+                super::stream::full_barrier(device, command_buffer);
                 command_buffer
             }
             None => unsafe {
@@ -208,6 +200,7 @@ impl GpuStream {
                 "the stream is already capturing".into(),
             ));
         }
+        core.flush_batch(&mut state, false)?;
         let info =
             vk::CommandPoolCreateInfo::default().queue_family_index(core.device.queue_family);
         let pool = unsafe { core.device.device.create_command_pool(&info, None) }?;
@@ -344,13 +337,14 @@ impl GpuGraph {
     pub fn launch(&self) -> Result<(), DriverError> {
         let core = &self.stream.core;
         let recorded = &self.recorded;
+        let reads: Vec<_> = recorded.reads.iter().collect();
+        let writes: Vec<_> = recorded.writes.iter().collect();
+        core.flush_others(&reads, &writes)?;
         let mut state = core.state.lock().unwrap();
         core.reclaim(&mut state)?;
         if let Some(capture) = &mut state.capture {
             return Err(capture.invalidate("GpuGraph::launch"));
         }
-        let reads: Vec<_> = recorded.reads.iter().collect();
-        let writes: Vec<_> = recorded.writes.iter().collect();
         let last = recorded.parts.len() - 1;
         // The value the next Vulkan part waits for, which CUDA signals.
         #[cfg(feature = "cuda")]

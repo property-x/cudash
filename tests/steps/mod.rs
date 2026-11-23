@@ -3,6 +3,8 @@
 pub mod driver;
 pub mod extensions;
 pub mod graph;
+#[cfg(feature = "experimental")]
+pub mod batching;
 pub mod interop;
 #[cfg(feature = "ash_latest")]
 #[path = "../common/push_next.rs"]
@@ -15,6 +17,16 @@ use std::sync::OnceLock;
 use cucumber::gherkin;
 
 pub use world::World;
+
+/// Turns batching on for `stream` when `CUDASH_TEST_BATCHING` is set, so the whole suite can run
+/// with every stream batching. Without the `experimental` feature it does nothing.
+pub fn batched(stream: std::sync::Arc<cudash::driver::GpuStream>) -> std::sync::Arc<cudash::driver::GpuStream> {
+    #[cfg(feature = "experimental")]
+    if std::env::var_os("CUDASH_TEST_BATCHING").is_some() {
+        stream.set_batching(true).expect("batching on");
+    }
+    stream
+}
 
 fn nvidia_present() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
@@ -90,6 +102,7 @@ fn gpu_has(name: &str) -> bool {
         "explicit-layout" => on(layout.workgroup_memory_explicit_layout),
         "float16-vector-atomics" => on(vec16.shader_float16_vector_atomics),
         "cooperative-matrix" => on(matrix.cooperative_matrix),
+        "frame-boundary" => ctx.default_stream().supports_frame_boundaries(),
         #[cfg(feature = "ash_latest")]
         other => gpu_has_latest(other),
         #[cfg(not(feature = "ash_latest"))]
@@ -200,6 +213,8 @@ pub fn selected(
         Some("needs two NVIDIA GPUs")
     } else if has("no-vulkan") {
         Some("needs a machine without a Vulkan loader")
+    } else if has("experimental") && !cfg!(feature = "experimental") {
+        Some("needs the experimental Cargo feature")
     } else if has("ash-latest") && !cfg!(feature = "ash_latest") {
         Some("needs the ash_latest Cargo feature")
     } else if gpu_tag("gpu-has-").is_some_and(|f| !gpu_has(f)) {

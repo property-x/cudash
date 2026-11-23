@@ -345,6 +345,8 @@ pub struct World {
     pub kernels: HashMap<String, Arc<driver::GpuFunction>>,
     pub graphs: HashMap<String, Arc<driver::GpuGraph>>,
     pub pinned: Option<driver::PinnedHostSlice<f32>>,
+    /// State of the batching steps (`steps/batching.rs`).
+    pub extra: Option<Box<dyn std::any::Any + Send>>,
     pub spirv: HashMap<String, Vec<u8>>,
 
     // Host data and the last value read back, shared by both layers

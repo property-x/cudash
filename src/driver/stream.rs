@@ -6,7 +6,7 @@ use std::{
     ffi::CString,
     fmt,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -26,6 +26,12 @@ use super::{
 struct Timeline {
     device: Arc<Device>,
     semaphore: vk::Semaphore,
+    /// The highest value submitted. Higher values wait in the stream's open batch.
+    submitted: AtomicU64,
+    /// The stream, to flush its batch when something waits on a value that isn't submitted.
+    stream: Weak<StreamCore>,
+    /// Why a batch failed to submit, so waits on its values fail instead of blocking.
+    failed: Mutex<Option<DriverError>>,
 }
 
 impl Drop for Timeline {
@@ -42,7 +48,24 @@ pub(crate) struct Point {
 }
 
 impl Point {
+    /// Submits the batch holding this point, if it's still open on its stream.
+    fn ensure_submitted(&self) -> Result<(), DriverError> {
+        let timeline = &self.timeline;
+        if self.value <= timeline.submitted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if let Some(stream) = timeline.stream.upgrade() {
+            stream.flush()?;
+        }
+        if self.value <= timeline.submitted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let failed = timeline.failed.lock().unwrap().clone();
+        Err(failed.unwrap_or(DriverError::DeviceLost(None)))
+    }
+
     fn wait(&self) -> Result<(), DriverError> {
+        self.ensure_submitted()?;
         let (semaphores, values) = ([self.timeline.semaphore], [self.value]);
         let info = vk::SemaphoreWaitInfo::default()
             .semaphores(&semaphores)
@@ -85,6 +108,19 @@ struct Pending {
     _keep: Vec<Keep>,
 }
 
+/// The open batch of a stream with batching on.
+#[derive(Default)]
+pub(crate) struct Batch {
+    command_buffer: Option<vk::CommandBuffer>,
+    /// Points on other timelines, and this stream's submitted ones, that the batch waits for.
+    waits: Vec<Point>,
+    keep: Vec<Keep>,
+    operations: usize,
+}
+
+/// A batch is submitted after this many operations, so it stays bounded.
+const BATCH_LIMIT: usize = 256;
+
 pub(crate) struct State {
     last_value: u64,
     /// What the next submission waits for. Starts on the source stream if forked.
@@ -94,6 +130,8 @@ pub(crate) struct State {
     available: Vec<vk::CommandBuffer>,
     /// Set between `begin_capture` and `end_capture`.
     pub(crate) capture: Option<Capture>,
+    /// `Some` while batching is on (`set_batching`).
+    batch: Option<Batch>,
 }
 
 static NEXT_FRAME_ID: AtomicU64 = AtomicU64::new(1);
@@ -135,23 +173,28 @@ impl StreamCore {
             let mut kind =
                 vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
             let info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
-            let timeline = Arc::new(Timeline {
-                device: device.clone(),
-                semaphore: vk_device.create_semaphore(&info, None)?,
-            });
+            let semaphore = vk_device.create_semaphore(&info, None)?;
             let info = vk::CommandPoolCreateInfo::default()
                 .queue_family_index(device.queue_family)
                 .flags(
                     vk::CommandPoolCreateFlags::TRANSIENT
                         | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
                 );
-            let pool = vk_device.create_command_pool(&info, None)?;
-            device.set_name(timeline.semaphore, format_args!("{name}"));
+            let pool = vk_device
+                .create_command_pool(&info, None)
+                .inspect_err(|_| vk_device.destroy_semaphore(semaphore, None))?;
+            device.set_name(semaphore, format_args!("{name}"));
             device.set_name(pool, format_args!("{name}"));
-            Ok(Arc::new(Self {
+            Ok(Arc::new_cyclic(|stream| Self {
                 name,
                 device: device.clone(),
-                timeline,
+                timeline: Arc::new(Timeline {
+                    device: device.clone(),
+                    semaphore,
+                    submitted: AtomicU64::new(0),
+                    stream: stream.clone(),
+                    failed: Mutex::new(None),
+                }),
                 pool,
                 state: Mutex::new(State {
                     last_value: 0,
@@ -160,6 +203,7 @@ impl StreamCore {
                     pending: VecDeque::new(),
                     available: Vec::new(),
                     capture: None,
+                    batch: None,
                 }),
                 reusable: Mutex::new(None),
                 staging: Mutex::new(Vec::new()),
@@ -282,6 +326,7 @@ impl StreamCore {
         frame_end: bool,
         record: impl FnOnce(&crate::ash::Device, vk::CommandBuffer),
     ) -> Result<Option<Point>, DriverError> {
+        self.flush_others(reads, writes)?;
         let device = &self.device.device;
         let mut state = self.state.lock().unwrap();
         self.reclaim(&mut state)?;
@@ -289,11 +334,55 @@ impl StreamCore {
             capture.record(self, label, reads, writes, keep, record)?;
             return Ok(None);
         }
+        if state.batch.is_some() {
+            return self
+                .record_batched(&mut state, label, reads, writes, keep, frame_end, record)
+                .map(Some);
+        }
 
-        // shortcut: one queue submission per operation, batch them if this shows up in
-        // profiles. Timeline waits give every operation a full memory dependency on what
-        // came before, so no pipeline barriers are needed.
-        let command_buffer = match state.available.pop() {
+        // shortcut: one queue submission per operation unless batching is on. Timeline waits
+        // give every operation a full memory dependency on what came before, so no pipeline
+        // barriers are needed.
+        let command_buffer = self.command_buffer(&mut state)?;
+        let submitted = self.begin(command_buffer).and_then(|()| {
+            self.record_labeled(command_buffer, label, record);
+            unsafe { device.end_command_buffer(command_buffer) }?;
+            let waits = required_waits(state.last.as_ref(), reads, writes);
+            self.queue(
+                &mut state,
+                Some(command_buffer),
+                true,
+                &waits,
+                &[],
+                &[],
+                (reads, writes),
+                keep,
+                frame_end,
+            )
+        });
+        if submitted.is_err() {
+            unsafe { device.free_command_buffers(self.pool, &[command_buffer]) };
+        }
+        submitted.map(Some)
+    }
+
+    /// Submits the open batches of other streams that an operation on `reads` and `writes`
+    /// waits for. Called before locking this stream, so two streams can't wait on each other's lock.
+    pub(crate) fn flush_others(
+        &self,
+        reads: &[&Arc<Buffer>],
+        writes: &[&Arc<Buffer>],
+    ) -> Result<(), DriverError> {
+        required_waits(None, reads, writes)
+            .iter()
+            .filter(|point| !Arc::ptr_eq(&point.timeline, &self.timeline))
+            .try_for_each(Point::ensure_submitted)
+    }
+
+    /// A command buffer from the stream's pool, reset.
+    fn command_buffer(&self, state: &mut State) -> Result<vk::CommandBuffer, DriverError> {
+        let device = &self.device.device;
+        Ok(match state.available.pop() {
             Some(command_buffer) => {
                 unsafe {
                     device.reset_command_buffer(
@@ -309,31 +398,130 @@ impl StreamCore {
                     .command_buffer_count(1);
                 device.allocate_command_buffers(&allocate)?[0]
             },
-        };
+        })
+    }
+
+    fn begin(&self, command_buffer: vk::CommandBuffer) -> Result<(), DriverError> {
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        let submitted = unsafe { device.begin_command_buffer(command_buffer, &begin) }
+        unsafe {
+            self.device
+                .device
+                .begin_command_buffer(command_buffer, &begin)
+        }
+        .map_err(DriverError::from)
+    }
+
+    /// Records an operation into the open batch, and submits the batch at the end of a frame
+    /// or at [`BATCH_LIMIT`].
+    #[allow(clippy::too_many_arguments)]
+    fn record_batched(
+        &self,
+        state: &mut State,
+        label: fmt::Arguments<'_>,
+        reads: &[&Arc<Buffer>],
+        writes: &[&Arc<Buffer>],
+        mut keep: Vec<Keep>,
+        frame_end: bool,
+        record: impl FnOnce(&crate::ash::Device, vk::CommandBuffer),
+    ) -> Result<Point, DriverError> {
+        if frame_end && state.frame_id.is_none() {
+            return Err(DriverError::NoActiveFrame);
+        }
+        let waits = required_waits(state.last.as_ref(), reads, writes);
+        let open = state.batch.as_ref().and_then(|batch| batch.command_buffer);
+        let command_buffer = match open {
+            Some(command_buffer) => {
+                full_barrier(&self.device.device, command_buffer);
+                command_buffer
+            }
+            None => {
+                let command_buffer = self.command_buffer(state)?;
+                if let Err(e) = self.begin(command_buffer) {
+                    unsafe {
+                        (self.device.device).free_command_buffers(self.pool, &[command_buffer])
+                    };
+                    return Err(e);
+                }
+                command_buffer
+            }
+        };
+        self.record_labeled(command_buffer, label, record);
+        let point = self.track(state, state.last_value + 1, reads, writes, &mut keep);
+        let submitted = self.timeline.submitted.load(Ordering::Acquire);
+        let batch = state.batch.as_mut().expect("batching is on");
+        batch.command_buffer = Some(command_buffer);
+        for wait in waits {
+            // Earlier operations in this batch are ordered by the barrier instead.
+            let own = Arc::ptr_eq(&wait.timeline, &self.timeline);
+            if own && wait.value > submitted {
+                continue;
+            }
+            match (batch.waits.iter_mut()).find(|w| Arc::ptr_eq(&w.timeline, &wait.timeline)) {
+                Some(w) => w.value = w.value.max(wait.value),
+                None => batch.waits.push(wait),
+            }
+        }
+        batch.keep.append(&mut keep);
+        batch.operations += 1;
+        if frame_end || batch.operations >= BATCH_LIMIT {
+            self.flush_batch(state, frame_end)?;
+        }
+        Ok(point)
+    }
+
+    /// Submits the open batch, if there is one, signaling the last value it reserved.
+    pub(crate) fn flush_batch(
+        &self,
+        state: &mut State,
+        frame_end: bool,
+    ) -> Result<(), DriverError> {
+        let Some(batch) = state.batch.as_mut() else {
+            return Ok(());
+        };
+        let Some(command_buffer) = batch.command_buffer.take() else {
+            return Ok(());
+        };
+        let waits = std::mem::take(&mut batch.waits);
+        let keep = std::mem::take(&mut batch.keep);
+        batch.operations = 0;
+        let value = state.last_value;
+        let device = &self.device.device;
+        let submitted = unsafe { device.end_command_buffer(command_buffer) }
             .map_err(DriverError::from)
             .and_then(|()| {
-                self.record_labeled(command_buffer, label, record);
-                unsafe { device.end_command_buffer(command_buffer) }?;
-                let waits = required_waits(state.last.as_ref(), reads, writes);
-                self.queue(
-                    &mut state,
+                self.submit_raw(
+                    state,
                     Some(command_buffer),
-                    true,
                     &waits,
                     &[],
                     &[],
-                    (reads, writes),
-                    keep,
+                    value,
                     frame_end,
                 )
             });
-        if submitted.is_err() {
-            unsafe { device.free_command_buffers(self.pool, &[command_buffer]) };
+        match submitted {
+            Ok(()) => {
+                state.pending.push_back(Pending {
+                    value,
+                    command_buffer: Some(command_buffer),
+                    _keep: keep,
+                });
+                Ok(())
+            }
+            Err(e) => {
+                // shortcut: the stream's later operations still wait for these values, which
+                // never come. Submitting fails only when the device is lost or out of memory.
+                unsafe { device.free_command_buffers(self.pool, &[command_buffer]) };
+                *self.timeline.failed.lock().unwrap() = Some(e.clone());
+                Err(e)
+            }
         }
-        submitted.map(Some)
+    }
+
+    /// Submits the open batch, if batching is on.
+    pub(crate) fn flush(&self) -> Result<(), DriverError> {
+        self.flush_batch(&mut self.state.lock().unwrap(), false)
     }
 
     /// Records `record` into `command_buffer`, inside a debug label named `label`.
@@ -361,9 +549,9 @@ impl StreamCore {
     }
 
     /// Submits `command_buffer`, which may be `None` for a submission that only orders work,
-    /// after `waits` and `extra_waits`, and signals the stream's next value and `extra_signals`.
-    /// Then records `tracked` as used by it, keeps `keep` and `tracked` alive until it's done,
-    /// and reuses the command buffer afterwards if `reuse`.
+    /// after the open batch, `waits` and `extra_waits`, and signals the stream's next value and
+    /// `extra_signals`. Then records `tracked` as used by it, keeps `keep` and `tracked` alive
+    /// until it's done, and reuses the command buffer afterwards if `reuse`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn queue(
         &self,
@@ -377,6 +565,40 @@ impl StreamCore {
         mut keep: Vec<Keep>,
         frame_end: bool,
     ) -> Result<Point, DriverError> {
+        // shortcut: the batch and this go in two submissions; one would do.
+        self.flush_batch(state, false)?;
+        let value = state.last_value + 1;
+        self.submit_raw(
+            state,
+            command_buffer,
+            waits,
+            extra_waits,
+            extra_signals,
+            value,
+            frame_end,
+        )?;
+        let point = self.track(state, value, reads, writes, &mut keep);
+        state.pending.push_back(Pending {
+            value,
+            command_buffer: command_buffer.filter(|_| reuse),
+            _keep: keep,
+        });
+        Ok(point)
+    }
+
+    /// One `vkQueueSubmit2` that waits for `waits` and `extra_waits`, and signals `value` on
+    /// this stream and `extra_signals`.
+    #[allow(clippy::too_many_arguments)]
+    fn submit_raw(
+        &self,
+        state: &mut State,
+        command_buffer: Option<vk::CommandBuffer>,
+        waits: &[Point],
+        extra_waits: &[vk::SemaphoreSubmitInfo<'_>],
+        extra_signals: &[vk::SemaphoreSubmitInfo<'_>],
+        value: u64,
+        frame_end: bool,
+    ) -> Result<(), DriverError> {
         let frame_id = state.frame_id;
         if frame_end && frame_id.is_none() {
             return Err(DriverError::NoActiveFrame);
@@ -386,7 +608,6 @@ impl StreamCore {
             .map(|point| semaphore_info(point.timeline.semaphore, point.value))
             .collect();
         wait_infos.extend_from_slice(extra_waits);
-        let value = state.last_value + 1;
         let mut signal_infos = vec![semaphore_info(self.timeline.semaphore, value)];
         signal_infos.extend_from_slice(extra_signals);
         let command_buffers: Vec<_> = command_buffer
@@ -415,6 +636,23 @@ impl StreamCore {
             .map_err(|e| self.device.error(e))?;
         }
 
+        self.timeline.submitted.store(value, Ordering::Release);
+        if frame_end {
+            state.frame_id = None;
+        }
+        Ok(())
+    }
+
+    /// Records that the operation signaling `value` reads `reads` and writes `writes`, and makes
+    /// it the stream's last. `keep` gets the buffers, so they live until it's done.
+    fn track(
+        &self,
+        state: &mut State,
+        value: u64,
+        reads: &[&Arc<Buffer>],
+        writes: &[&Arc<Buffer>],
+        keep: &mut Vec<Keep>,
+    ) -> Point {
         let point = Point {
             timeline: self.timeline.clone(),
             value,
@@ -435,15 +673,7 @@ impl StreamCore {
         );
         state.last_value = value;
         state.last = Some(point.clone());
-        if frame_end {
-            state.frame_id = None;
-        }
-        state.pending.push_back(Pending {
-            value,
-            command_buffer: command_buffer.filter(|_| reuse),
-            _keep: keep,
-        });
-        Ok(point)
+        point
     }
 
     fn frame(&self) -> Result<u64, DriverError> {
@@ -532,6 +762,18 @@ pub(crate) fn semaphore_info(
         .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
 }
 
+/// Makes everything recorded before it in `command_buffer` finish, and its writes visible,
+/// before anything recorded after it starts.
+pub(crate) fn full_barrier(device: &crate::ash::Device, command_buffer: vk::CommandBuffer) {
+    let barrier = [vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)];
+    let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
+    unsafe { device.cmd_pipeline_barrier2(command_buffer, &dependency) };
+}
+
 fn record_read(buffer: &Buffer, point: &Point) {
     let mut tracking = buffer.tracking.lock().unwrap();
     tracking
@@ -563,7 +805,8 @@ impl Drop for StreamCore {
     fn drop(&mut self) {
         // Everything queued on this stream must finish before its semaphore and
         // command buffers go away. Errors here mean the device is lost anyway.
-        let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = self.flush_batch(&mut state, false);
         if let Some(point) = &state.last {
             let _ = point.wait();
         }
@@ -620,6 +863,42 @@ impl GpuStream {
         self.core.synchronize()
     }
 
+    /// Experimental, cudash-only: while on, operations on this stream are recorded into one
+    /// command buffer and submitted together, instead of one submission each. That makes a
+    /// burst of small operations much cheaper.
+    ///
+    /// The batch is submitted when anything waits for its work: [`Self::synchronize`],
+    /// [`GpuContext::synchronize`], copies to the host, host slices, other streams using its
+    /// buffers, [`Self::fork`], captures and graph launches, [`Self::stop_frame`], turning
+    /// batching off, dropping the stream, every 256 operations, and [`Self::flush`]. Until then
+    /// the GPU doesn't start on it, so call [`Self::flush`] when nothing will wait for a while.
+    /// Call it too before submitting your own Vulkan work that depends on this stream.
+    ///
+    /// Errors from submitting, such as a lost device, are returned by the call that submits.
+    #[cfg(feature = "experimental")]
+    pub fn set_batching(&self, on: bool) -> Result<(), DriverError> {
+        let mut state = self.core.state.lock().unwrap();
+        if on {
+            if state.batch.is_none() {
+                state.batch = Some(Batch::default());
+                let mut batching = self.core.device.batching.lock().unwrap();
+                batching.retain(|stream| stream.strong_count() > 0);
+                batching.push(Arc::downgrade(&self.core));
+            }
+        } else {
+            self.core.flush_batch(&mut state, false)?;
+            state.batch = None;
+        }
+        Ok(())
+    }
+
+    /// Experimental, cudash-only: submits this stream's open batch now (see
+    /// [`Self::set_batching`]). Does nothing when batching is off.
+    #[cfg(feature = "experimental")]
+    pub fn flush(&self) -> Result<(), DriverError> {
+        self.core.flush()
+    }
+
     /// Whether this device supports off-screen frame boundaries for tools such as Nsight Graphics.
     pub fn supports_frame_boundaries(&self) -> bool {
         self.core.device.frame_boundary
@@ -639,6 +918,7 @@ impl GpuStream {
 
     /// A new stream whose work starts after work already queued on this one.
     pub fn fork(&self) -> Result<Arc<Self>, DriverError> {
+        self.core.flush()?;
         let core = StreamCore::new(&self.core.device, self.core.last_point(), "fork")?;
         Ok(Self::new(&self.ctx, core))
     }
@@ -1086,6 +1366,34 @@ mod tests {
 
     use super::*;
     use crate::driver::DevicePtr;
+
+    /// A batching stream submits only at flush points, and a wait on its work flushes it.
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn batching_submits_at_flush_points() {
+        let ctx = GpuContext::new(0).unwrap();
+        let stream = ctx.new_stream().unwrap();
+        stream.set_batching(true).unwrap();
+        let submitted = || stream.core.timeline.submitted.load(Ordering::Acquire);
+        let mut a = stream.alloc_zeros::<u32>(4).unwrap();
+        stream.memcpy_htod(&[1u32, 2, 3, 4], &mut a).unwrap();
+        let b = stream.clone_dtod(&a).unwrap();
+        assert_eq!(submitted(), 0, "nothing is submitted before a flush point");
+        assert_eq!(stream.clone_dtoh(&b).unwrap(), [1, 2, 3, 4]);
+
+        // Another stream reading a buffer this batch writes flushes it.
+        stream.memset_zeros(&mut a).unwrap();
+        let before = submitted();
+        let other = ctx.new_stream().unwrap();
+        assert_eq!(other.clone_dtoh(&a).unwrap(), [0; 4]);
+        assert!(submitted() > before);
+
+        stream.memcpy_htod(&[5u32; 4], &mut a).unwrap();
+        stream.flush().unwrap();
+        stream.set_batching(false).unwrap();
+        assert_eq!(stream.clone_dtoh(&a).unwrap(), [5; 4]);
+        ctx.synchronize().unwrap();
+    }
 
     /// How many gates exist. NVIDIA's driver waits for the GPU to go idle while importing
     /// read-only memory, holding the lock that opening a gate needs, so that import waits for 0.

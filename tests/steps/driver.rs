@@ -173,7 +173,7 @@ fn read_into_result(w: &mut World, buffer: &str, stream: &Arc<driver::GpuStream>
 #[given(regex = r"^a context on the first Vulkan 1\.3 GPU$")]
 fn context_on_first_gpu(w: &mut World) {
     let ctx = driver::GpuContext::new(0).expect("a Vulkan 1.3 GPU exists");
-    w.streams.insert("default".to_owned(), ctx.default_stream());
+    w.streams.insert("default".to_owned(), super::batched(ctx.default_stream()));
     w.drv = Some(ctx);
 }
 
@@ -193,7 +193,7 @@ fn at_least_one_gpu(_w: &mut World) {
 
 #[given(regex = r#"^a second stream from the same context as "(\w+)"$"#)]
 fn second_stream(w: &mut World, name: String) {
-    let stream = w.ctx().new_stream().expect("a second stream");
+    let stream = super::batched(w.ctx().new_stream().expect("a second stream"));
     w.streams.insert(name, stream);
 }
 
@@ -760,7 +760,7 @@ fn when_threads(w: &mut World) {
             .map(|t| {
                 let ctx = ctx.clone();
                 scope.spawn(move || {
-                    let stream = ctx.new_stream().expect("a stream");
+                    let stream = super::batched(ctx.new_stream().expect("a stream"));
                     let values = vec![t; 256];
                     let buf = stream.clone_htod(&values).expect("upload");
                     stream.clone_dtoh(&buf).expect("read") == values
@@ -804,7 +804,7 @@ fn when_queue_and_drop(w: &mut World, times: usize) {
 #[when(regex = r#"^I fork the default stream as "(\w+)"$"#)]
 fn when_fork(w: &mut World, name: String) {
     let parent = w.default_stream();
-    let fork = parent.fork().expect("fork succeeds");
+    let fork = super::batched(parent.fork().expect("fork succeeds"));
     w.streams.insert(name, fork);
 }
 

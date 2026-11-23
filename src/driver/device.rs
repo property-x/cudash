@@ -53,6 +53,8 @@ pub(crate) struct DeviceState {
     /// SPIR-V capabilities a kernel may not declare, with the feature they need.
     pub(crate) unsupported_capabilities: Vec<(u32, &'static str)>,
     pub(crate) frame_boundary: bool,
+    /// Streams that have had batching on, for `GpuContext::synchronize` to flush.
+    pub(crate) batching: Mutex<Vec<std::sync::Weak<super::stream::StreamCore>>>,
     /// Labels operations for tools such as RenderDoc, where the instance has the extension.
     pub(crate) debug_utils: Option<ext::debug_utils::Device>,
     /// The matching CUDA context, created by `interop` on first use.
@@ -494,6 +496,7 @@ impl Device {
                 extensions,
                 unsupported_capabilities,
                 frame_boundary,
+                batching: Mutex::new(Vec::new()),
                 debug_utils,
                 #[cfg(feature = "cuda")]
                 cuda: Default::default(),
