@@ -51,7 +51,7 @@ on RADV and 160 µs on a GTX 1650 Ti, against about 50 µs when they go in one s
 With the `experimental` feature, `stream.set_batching(true)` records the stream's operations into one command
 buffer instead, and submits it when something waits for them:
 
-```rust
+```rust,ignore
 stream.set_batching(true)?;
 for _ in 0..16 {
     unsafe { stream.launch_builder(&f).arg(&mut data).launch(cfg) }?;

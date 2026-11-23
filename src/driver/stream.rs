@@ -57,11 +57,16 @@ impl Point {
         if let Some(stream) = timeline.stream.upgrade() {
             stream.flush()?;
         }
-        if self.value <= timeline.submitted.load(Ordering::Acquire) {
-            return Ok(());
+        // Without a stream, it's being dropped, and its drop flushes or records why it couldn't.
+        loop {
+            if self.value <= timeline.submitted.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            if let Some(e) = timeline.failed.lock().unwrap().clone() {
+                return Err(e);
+            }
+            std::thread::yield_now();
         }
-        let failed = timeline.failed.lock().unwrap().clone();
-        Err(failed.unwrap_or(DriverError::DeviceLost(None)))
     }
 
     fn wait(&self) -> Result<(), DriverError> {

@@ -13,7 +13,7 @@ use std::{
 
 use cucumber::{given, then, when};
 use cudash::driver::{
-    GpuContext, GpuGraph, GpuSlice, GpuStream, PinnedHostSlice,
+    GpuContext, GpuSlice, GpuStream, PinnedHostSlice,
     sys::{CUgraphInstantiate_flags, CUstreamCaptureMode},
 };
 
@@ -24,15 +24,17 @@ const RELAXED: CUstreamCaptureMode = CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE
 const FLAGS: CUgraphInstantiate_flags = CUgraphInstantiate_flags(0);
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Runs `f` on a thread and panics if it hasn't finished after `TIMEOUT`. The thread is left
-/// behind, which is fine: the test run exits soon after.
+/// Runs `f` on a thread and ends the whole run with exit code 101 if it hasn't finished after
+/// `TIMEOUT`, naming `what`. Unwinding instead would drop streams that are stuck and hang the run.
 fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(f());
     });
-    rx.recv_timeout(TIMEOUT)
-        .unwrap_or_else(|_| panic!("{what} did not finish within {TIMEOUT:?}: a flush is missing"))
+    rx.recv_timeout(TIMEOUT).unwrap_or_else(|_| {
+        eprintln!("FAILED: {what} did not finish within {TIMEOUT:?}: a flush is missing");
+        std::process::exit(101)
+    })
 }
 
 struct SendPtr(*const u32);
@@ -47,7 +49,6 @@ struct Probe {
     dev: GpuSlice<u32>,
     pinned: PinnedHostSlice<u32>,
     ptr: SendPtr,
-    graph: Option<GpuGraph>,
 }
 
 impl Probe {
@@ -69,7 +70,6 @@ impl Probe {
             dev,
             pinned,
             ptr,
-            graph: None,
         };
         // Nothing may have run: the batch is still open.
         thread::sleep(Duration::from_millis(100));
@@ -157,7 +157,7 @@ fn then_finished(w: &mut World) {
     for p in all.iter() {
         if let Some(s) = &p.stream {
             let s = s.clone();
-            let _ = within("cleanup", move || {
+            within("cleanup", move || {
                 let _ = s.synchronize();
                 let _ = s.end_capture(FLAGS);
             });
@@ -178,26 +178,38 @@ fn then_waiter(w: &mut World, waiter: String) {
         "clone_dtoh on the batching stream" => {
             let (s, d) = (stream.clone(), dev as *const GpuSlice<u32> as usize);
             // SAFETY: `dev` outlives the scoped wait below.
-            within(&waiter, move || s.clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) }).unwrap())
+            within(&waiter, move || {
+                s.clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) })
+                    .unwrap()
+            })
         }
         "a read on another stream" => {
             let d = dev as *const GpuSlice<u32> as usize;
             within(&waiter, move || {
                 let other = ctx.new_stream().unwrap();
                 // SAFETY: as above.
-                other.clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) }).unwrap()
+                other
+                    .clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) })
+                    .unwrap()
             })
         }
         "a read on the buffer's own stream" => {
             let d = dev as *const GpuSlice<u32> as usize;
             // SAFETY: as above.
-            within(&waiter, move || owner.clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) }).unwrap())
+            within(&waiter, move || {
+                owner
+                    .clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) })
+                    .unwrap()
+            })
         }
         "the pinned slice" => {
             let p = &probe.pinned as *const PinnedHostSlice<u32> as usize;
             // SAFETY: as above.
             within(&waiter, move || {
-                unsafe { &*(p as *const PinnedHostSlice<u32>) }.as_slice().unwrap().to_vec()
+                unsafe { &*(p as *const PinnedHostSlice<u32>) }
+                    .as_slice()
+                    .unwrap()
+                    .to_vec()
             })
         }
         "a read after the stream is dropped" => {
@@ -205,7 +217,11 @@ fn then_waiter(w: &mut World, waiter: String) {
             probe.stream = None;
             let d = dev as *const GpuSlice<u32> as usize;
             // SAFETY: as above.
-            within(&waiter, move || owner.clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) }).unwrap())
+            within(&waiter, move || {
+                owner
+                    .clone_dtoh(unsafe { &*(d as *const GpuSlice<u32>) })
+                    .unwrap()
+            })
         }
         other => panic!("unknown waiter {other:?}"),
     };
@@ -222,7 +238,9 @@ fn given_pair(w: &mut World) {
     w.streams.insert("plain".into(), b);
 }
 
-#[when(regex = r"^two batching streams read each other's buffers in both directions, 300 times each$")]
+#[when(
+    regex = r"^two batching streams read each other's buffers in both directions, 300 times each$"
+)]
 fn when_deadlock(w: &mut World) {
     let ctx = w.ctx().clone();
     within("the exchange", move || {
@@ -261,7 +279,9 @@ fn when_deadlock(w: &mut World) {
 #[then(regex = r"^the exchange completed with the final values$")]
 fn then_exchange(_w: &mut World) {}
 
-#[when(regex = r"^I queue (\d+) copies into consecutive elements, each after a write of its index$")]
+#[when(
+    regex = r"^I queue (\d+) copies into consecutive elements, each after a write of its index$"
+)]
 fn when_ordered(w: &mut World, count: usize) {
     let ctx = w.ctx().clone();
     let out = within("the ordered batch", move || {
@@ -285,7 +305,9 @@ fn then_indices(w: &mut World) {
     assert!(bad.is_none(), "first element out of order: {bad:?}");
 }
 
-#[when(regex = r"^I capture a copy from b to a on a batching stream, queue a write to b, and launch the graph$")]
+#[when(
+    regex = r"^I capture a copy from b to a on a batching stream, queue a write to b, and launch the graph$"
+)]
 fn when_graph(w: &mut World) {
     let ctx = w.ctx().clone();
     let (a, graph_ran_after) = within("the graph", move || {

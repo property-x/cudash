@@ -173,7 +173,8 @@ fn read_into_result(w: &mut World, buffer: &str, stream: &Arc<driver::GpuStream>
 #[given(regex = r"^a context on the first Vulkan 1\.3 GPU$")]
 fn context_on_first_gpu(w: &mut World) {
     let ctx = driver::GpuContext::new(0).expect("a Vulkan 1.3 GPU exists");
-    w.streams.insert("default".to_owned(), super::batched(ctx.default_stream()));
+    w.streams
+        .insert("default".to_owned(), super::batched(ctx.default_stream()));
     w.drv = Some(ctx);
 }
 

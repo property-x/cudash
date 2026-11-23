@@ -24,6 +24,7 @@ One home per behavior, so the two don't drift apart:
 | `driver_streams.feature`   | Ordering, fork, synchronize, threads                       | Any Vulkan 1.3 GPU      |
 | `driver_graphs.feature`    | Stream capture, graph replay, refused calls                | Any Vulkan 1.3 GPU      |
 | `driver_extensions.feature` | Optional shader extensions: kernels using them, `MissingFeature` for capabilities the GPU lacks | Any Vulkan 1.3 GPU; some scenarios skip by GPU feature |
+| `driver_batching.feature`  | Experimental stream batching: one scenario per flush point, with timeouts | Any Vulkan 1.3 GPU, `--features experimental` |
 | `driver_context.feature`   | Device choice and description                              | Any Vulkan 1.3 GPU      |
 | `interop_memory.feature`   | No CUDA: `ctx.as_cuda()`, `stream.as_cuda()`, lending give errors | Any Vulkan 1.3 GPU      |
 | `interop_sharing.feature`  | Turn-taking and semaphore timeouts. Nothing runs these yet | NVIDIA with CUDA        |
@@ -42,5 +43,6 @@ One home per behavior, so the two don't drift apart:
 | `@planned`       | Designed in `plan/api.md`, not implemented                                           |
 | `@open-question` | Depends on something the project hasn't settled. See `notes/`                        |
 | `@gpu-has-<x>`, `@gpu-lacks-<x>` | Skips unless the first GPU has (or lacks) a shader feature. Names are in `gpu_has` in `tests/steps/mod.rs` |
+| `@experimental`  | Needs the `experimental` Cargo feature. Skips without it. `CUDASH_TEST_BATCHING=1` turns batching on for every stream the steps and `tests/driver.rs`, `tests/images.rs` create |
 | `@ash-latest`    | Needs the `ash_latest` Cargo feature. Skips without it. `@gpu-has-`/`@gpu-lacks-` names for these extensions are in `gpu_has_latest`, which also needs the extension listed (Mesa fills feature structs of extensions it doesn't expose) |
 | `@known-gap`     | Known to fail today. The scenario states the intended behaviour                      |

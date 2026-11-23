@@ -21,7 +21,8 @@ fn given_other_vendor(w: &mut World) {
             props.vendor_id != NVIDIA
         })
         .expect("this scenario needs a non-NVIDIA Vulkan 1.3 GPU");
-    w.streams.insert("default".to_owned(), super::batched(ctx.default_stream()));
+    w.streams
+        .insert("default".to_owned(), super::batched(ctx.default_stream()));
     w.drv = Some(ctx);
 }
 

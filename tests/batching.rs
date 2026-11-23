@@ -4,7 +4,11 @@
 //! `features/driver_batching.feature`.
 #![cfg(feature = "experimental")]
 
-use std::{sync::Arc, sync::mpsc, thread, time::Duration};
+use std::{
+    sync::{Arc, mpsc},
+    thread,
+    time::Duration,
+};
 
 use cudash::driver::*;
 
@@ -163,7 +167,9 @@ fn pinned_host_memory_changed_before_the_flush() {
         unsafe { std::slice::from_raw_parts_mut(raw, 64) }.fill(3);
         let (g1, g2) = (s.clone_dtoh(&d1).unwrap()[0], s.clone_dtoh(&d2).unwrap()[0]);
         assert_eq!(g1, 1, "accessor write must flush the earlier batch first");
-        eprintln!("pinned: raw write before flush seen as {g2} (3 = read late, 2 = read at queue time)");
+        eprintln!(
+            "pinned: raw write before flush seen as {g2} (3 = read late, 2 = read at queue time)"
+        );
         assert!(g2 == 2 || g2 == 3);
     });
 }
@@ -205,7 +211,8 @@ fn many_short_lived_buffers() {
     });
 }
 
-/// Dropping a context-side stream while another thread waits on its buffer.
+/// Dropping a batching stream while another thread waits on its buffer. FAILS today with DeviceLost:
+/// `todo/batching-drop-race.md`.
 #[test]
 fn drop_stream_while_another_thread_reads() {
     within("drop vs read", || {

@@ -1,10 +1,10 @@
 //! Step definitions for the feature files, and the filter that decides which scenarios run.
 
+#[cfg(feature = "experimental")]
+pub mod batching;
 pub mod driver;
 pub mod extensions;
 pub mod graph;
-#[cfg(feature = "experimental")]
-pub mod batching;
 pub mod interop;
 #[cfg(feature = "ash_latest")]
 #[path = "../common/push_next.rs"]
@@ -20,7 +20,9 @@ pub use world::World;
 
 /// Turns batching on for `stream` when `CUDASH_TEST_BATCHING` is set, so the whole suite can run
 /// with every stream batching. Without the `experimental` feature it does nothing.
-pub fn batched(stream: std::sync::Arc<cudash::driver::GpuStream>) -> std::sync::Arc<cudash::driver::GpuStream> {
+pub fn batched(
+    stream: std::sync::Arc<cudash::driver::GpuStream>,
+) -> std::sync::Arc<cudash::driver::GpuStream> {
     #[cfg(feature = "experimental")]
     if std::env::var_os("CUDASH_TEST_BATCHING").is_some() {
         stream.set_batching(true).expect("batching on");
