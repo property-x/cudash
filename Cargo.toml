@@ -57,10 +57,6 @@ name = "launch_cost"
 harness = false
 
 [[bench]]
-name = "submit_strategy"
-harness = false
-
-[[bench]]
 name = "batching"
 harness = false
 required-features = ["experimental"]
